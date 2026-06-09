@@ -19,19 +19,27 @@ This firmware controls the low-level robot layer for BizBot.
 
 Laptop -> USB Serial -> ESP32 -> Motor Driver -> Motors
 
-## Commands
+## Command Protocol
 
+Send commands to the ESP32 over USB serial at 115200 baud. Each command must end with a newline (`\n`).
+
+```text
 ENABLE
 DISABLE
 STOP
 CMD_VEL <linear> <angular>
 GET_STATE
+```
 
-## Example
+`linear` and `angular` accept normalized values from `-1.0` to `1.0`.
 
+```text
+ENABLE
 CMD_VEL 0.2 0.0
-CMD_VEL 0.0 0.3
+GET_STATE
 STOP
+DISABLE
+```
 
 ## Repo structure
 
