@@ -18,8 +18,8 @@
 #define HOVER_SERIAL_BAUD  115200    // must match the firmware's HOVER_SERIAL_BAUD
 #define START_FRAME        0xABCD    // frame marker shared by both sides
 #define TIME_SEND          100       // ms between commands; you MUST keep sending or the board times out and zeroes the command
-#define HOVER_RX_PIN       16        // ESP32 pin wired to mainboard TX (PB10)
-#define HOVER_TX_PIN       17        // ESP32 pin wired to mainboard RX (PB11)
+#define HOVER_RX_PIN       25        // ESP32 pin wired to mainboard TX (PB10)
+#define HOVER_TX_PIN       26        // ESP32 pin wired to mainboard RX (PB11)
 
 // SAFETY: start at 0 (link test only, no motion).
 // Raise to ~30-50 ONLY with the wheels off the ground.
