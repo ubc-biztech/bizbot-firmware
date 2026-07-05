@@ -11,18 +11,19 @@ float PID::update(
     float dtSeconds,
     float measurementRate
 ) {
-    const float error = target - measurement;
-
-    if (dtSeconds > 0.0f) {
-        integral += error * dtSeconds;
-
-        if (hasOutputLimits && ki != 0.0f) {
-            const float maxIntegral = maxOutput / fabsf(ki);
-            integral = constrain(integral, -maxIntegral, maxIntegral);
-        }
+    if (dtSeconds <= 0.0f || dtSeconds > 0.1f) {
+        return 0.0f;
     }
 
-    // Use gyro rate for damping; opposes pitch velocity.
+    const float error = target - measurement;
+
+    integral += error * dtSeconds;
+
+    if (hasOutputLimits && ki != 0.0f) {
+        const float maxIntegral = maxOutput / fabsf(ki);
+        integral = constrain(integral, -maxIntegral, maxIntegral);
+    }
+
     const float derivative = -measurementRate;
 
     float output = (kp * error) + (ki * integral) + (kd * derivative);
@@ -41,9 +42,18 @@ void PID::setTunings(float newKp, float newKi, float newKd) {
 }
 
 void PID::setOutputLimits(float minOut, float maxOut) {
+    if (minOut >= maxOut) {
+        return;
+    }
+
     minOutput = minOut;
     maxOutput = maxOut;
     hasOutputLimits = true;
+
+    if (ki != 0.0f) {
+        const float maxIntegral = maxOutput / fabsf(ki);
+        integral = constrain(integral, -maxIntegral, maxIntegral);
+    }
 }
 
 void PID::reset() {
