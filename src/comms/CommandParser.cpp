@@ -5,13 +5,6 @@ constexpr float MIN_COMMAND_VALUE = -1.0f;
 constexpr float MAX_COMMAND_VALUE = 1.0f;
 }
 
-// While input is available:
-    // 1. Read one character.
-    // 2. Add it to buffer.
-    // 3. On '\n', call handleCommand().
-    // 4. Reset the buffer.
-    // 5. Reject commands that are too long.
-    
 void CommandParser::update(
     Stream& input,
     Print& output,
@@ -92,6 +85,7 @@ void CommandParser::handleCommand(
     }
 
     if (strcmp(command, "GET_STATE") == 0) {
+        state.lastCommandMs = millis();
         printState(output, state);
         return;
     }
@@ -154,6 +148,12 @@ void CommandParser::printState(
     output.print(state.targetAngular, 3);
     output.print(" pitch=");
     output.print(state.pitchDeg, 2);
+    output.print(" pitch_rate=");
+    output.print(state.pitchRateDegPerSec, 2);
     output.print(" battery=");
-    output.println(state.batteryVoltage, 2);
+    output.print(state.batteryVoltage, 2);
+    output.print(" wheel_l=");
+    output.print(state.leftWheelSpeed, 0);
+    output.print(" wheel_r=");
+    output.println(state.rightWheelSpeed, 0);
 }
