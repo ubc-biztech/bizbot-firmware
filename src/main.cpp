@@ -9,6 +9,7 @@
  */
 
 #include <Arduino.h>
+#include <WiFi.h>
 
 #include "comms/CommandParser.h"
 #include "config.h"
@@ -20,13 +21,16 @@ HardwareSerial& HoverSerial = Serial2;
 HardwareSerial& DebugSerial = Serial;
 
 RobotState robotState;
-CommandParser commandParser;
+CommandParser usbCommandParser;
+CommandParser wifiCommandParser;
 Imu imu;
 BalanceController balanceController(
     BALANCE_KP,
     BALANCE_KI,
     BALANCE_KD
 );
+WiFiServer wifiControlServer(WIFI_CONTROL_PORT);
+WiFiClient wifiControlClient;
 
 typedef struct {
     uint16_t start;
@@ -54,6 +58,8 @@ SerialFeedback NewFeedback;
 uint32_t lastControlUs = 0;
 bool latchedImuFault = false;
 bool wasEnabled = false;
+bool wifiControlReady = false;
+bool wifiControlWasConnected = false;
 
 void onEnabled() {
     balanceController.reset();
@@ -69,6 +75,16 @@ void Send(int16_t steer, int16_t speed) {
     Command.checksum =
         static_cast<uint16_t>(Command.start ^ Command.steer ^ Command.speed);
     HoverSerial.write(reinterpret_cast<uint8_t*>(&Command), sizeof(Command));
+}
+
+void disableRobot() {
+    robotState.enabled = false;
+    robotState.targetLinear = 0.0f;
+    robotState.targetAngular = 0.0f;
+    wasEnabled = false;
+
+    balanceController.reset();
+    Send(0, 0);
 }
 
 void Receive() {
@@ -133,18 +149,89 @@ bool tiltLimitExceeded() {
 }
 
 void stopRobot(const char* reason) {
-    robotState.enabled = false;
-    robotState.targetLinear = 0.0f;
-    robotState.targetAngular = 0.0f;
-
-    balanceController.reset();
-    Send(0, 0);
+    disableRobot();
 
     DebugSerial.print("FAULT ");
     DebugSerial.println(reason);
 }
 
+void startWifiControl() {
+    WiFi.mode(WIFI_AP);
+
+    if (!WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD)) {
+        DebugSerial.println("FAULT WIFI_AP");
+        return;
+    }
+
+    wifiControlServer.begin();
+    wifiControlServer.setNoDelay(true);
+    wifiControlReady = true;
+
+    DebugSerial.print("WiFi AP: ");
+    DebugSerial.println(WIFI_AP_SSID);
+    DebugSerial.print("WiFi control: ");
+    DebugSerial.print(WiFi.softAPIP());
+    DebugSerial.print(":");
+    DebugSerial.println(WIFI_CONTROL_PORT);
+}
+
+void discardUsbCommands() {
+    while (DebugSerial.available() > 0) {
+        DebugSerial.read();
+    }
+}
+
+void updateCommandInput() {
+    bool wifiConnected =
+        wifiControlClient && wifiControlClient.connected();
+
+    if (!wifiConnected && wifiControlWasConnected) {
+        wifiControlClient.stop();
+        stopRobot("WIFI_DISCONNECT");
+        DebugSerial.println("WiFi controller disconnected; USB control restored");
+    }
+
+    if (!wifiConnected && wifiControlReady) {
+        WiFiClient candidate = wifiControlServer.available();
+
+        if (candidate) {
+            disableRobot();
+            wifiControlClient = candidate;
+            wifiControlClient.setNoDelay(true);
+            wifiConnected = true;
+
+            DebugSerial.print("WiFi controller connected: ");
+            DebugSerial.println(wifiControlClient.remoteIP());
+        }
+    }
+
+    wifiControlWasConnected = wifiConnected;
+
+    if (wifiConnected) {
+        // Wi-Fi owns control while connected. Do not queue stale USB commands.
+        discardUsbCommands();
+        wifiCommandParser.update(
+            wifiControlClient,
+            wifiControlClient,
+            robotState
+        );
+        return;
+    }
+
+    usbCommandParser.update(DebugSerial, DebugSerial, robotState);
+}
+
 void runControlLoop() {
+#if IMU_USE_STUB
+    // The stub reports a permanently upright robot and must never drive motors.
+    if (robotState.enabled) {
+        stopRobot("IMU_STUB");
+    } else {
+        Send(0, 0);
+    }
+    return;
+#endif
+
     if (!imu.isReady()) {
         if (robotState.enabled && !latchedImuFault) {
             latchedImuFault = true;
@@ -209,6 +296,9 @@ void setup() {
         HOVER_TX_PIN
     );
 
+    Send(0, 0);
+    startWifiControl();
+
     if (!imu.begin()) {
         robotState.enabled = false;
         DebugSerial.println("FAULT IMU_INIT");
@@ -216,13 +306,12 @@ void setup() {
         DebugSerial.println("OK IMU_INIT");
     }
 
-    Send(0, 0);
     robotState.lastCommandMs = millis();
     DebugSerial.println("BizBot firmware ready");
 }
 
 void loop() {
-    commandParser.update(DebugSerial, DebugSerial, robotState);
+    updateCommandInput();
 
     if (robotState.enabled && !wasEnabled) {
         onEnabled();

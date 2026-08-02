@@ -8,6 +8,11 @@ constexpr uint16_t START_FRAME = 0xABCD;
 constexpr int HOVER_RX_PIN = 25;
 constexpr int HOVER_TX_PIN = 26;
 
+// Local Wi-Fi control. Change the password before using the robot in public.
+constexpr char WIFI_AP_SSID[] = "BizBot-Control";
+constexpr char WIFI_AP_PASSWORD[] = "bizbot-control";
+constexpr uint16_t WIFI_CONTROL_PORT = 3333;
+
 // Max hoverboard command magnitude; confirm with restrained hardware tests.
 constexpr int16_t MAX_HOVERBOARD_COMMAND = 50;
 

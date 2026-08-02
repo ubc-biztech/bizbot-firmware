@@ -1,13 +1,7 @@
-"""
-Hold W/A/S/D to drive BizBot over USB serial. Release to stop. Q to quit.
+"""Hold W/A/S/D to drive BizBot over USB serial or local Wi-Fi."""
 
-Setup:
-    pip install pyserial keyboard
-
-macOS: System Settings → Privacy & Security → Accessibility → allow Terminal/Cursor.
-Linux: may need sudo for global key capture.
-"""
-
+import argparse
+import socket
 import sys
 import threading
 import time
@@ -17,6 +11,8 @@ import serial
 from serial.tools import list_ports
 
 BAUD = 115200
+DEFAULT_WIFI_HOST = "192.168.4.1"
+DEFAULT_WIFI_PORT = 3333
 KEEPALIVE_INTERVAL_S = 0.2
 POLL_INTERVAL_S = 0.05
 
@@ -28,7 +24,70 @@ running.set()
 
 keepalive_cmd = "STOP"
 keepalive_lock = threading.Lock()
-serial_lock = threading.Lock()
+write_lock = threading.Lock()
+
+
+class SerialTransport:
+    def __init__(self, port):
+        self.port = port
+        self.connection = serial.Serial(port, BAUD, timeout=0.1)
+
+    @property
+    def description(self):
+        return f"USB serial {self.port} at {BAUD} baud"
+
+    def send_line(self, command):
+        self.connection.write((command + "\n").encode())
+
+    def read_line(self):
+        data = self.connection.readline()
+        if not data:
+            return None
+        return data.decode(errors="replace").strip()
+
+    def close(self):
+        self.connection.close()
+
+
+class WifiTransport:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.connection = socket.create_connection((host, port), timeout=3)
+        self.connection.settimeout(0.1)
+        self.read_buffer = bytearray()
+
+    @property
+    def description(self):
+        return f"Wi-Fi TCP {self.host}:{self.port}"
+
+    def send_line(self, command):
+        self.connection.sendall((command + "\n").encode())
+
+    def read_line(self):
+        newline_index = self.read_buffer.find(b"\n")
+
+        if newline_index < 0:
+            try:
+                data = self.connection.recv(256)
+            except socket.timeout:
+                return None
+
+            if not data:
+                raise ConnectionError("the ESP32 closed the Wi-Fi connection")
+
+            self.read_buffer.extend(data)
+            newline_index = self.read_buffer.find(b"\n")
+
+        if newline_index < 0:
+            return None
+
+        line = bytes(self.read_buffer[:newline_index])
+        del self.read_buffer[:newline_index + 1]
+        return line.decode(errors="replace").rstrip("\r")
+
+    def close(self):
+        self.connection.close()
 
 
 def find_serial_port():
@@ -49,12 +108,12 @@ def find_serial_port():
     return "COM3"
 
 
-def send(ser, cmd, echo=True):
+def send(transport, cmd, echo=True):
     if echo:
         print(">", cmd)
 
-    with serial_lock:
-        ser.write((cmd + "\n").encode())
+    with write_lock:
+        transport.send_line(cmd)
 
 
 def set_keepalive(cmd):
@@ -69,14 +128,30 @@ def get_keepalive():
         return keepalive_cmd
 
 
-def keepalive_loop(ser):
+def keepalive_loop(transport):
     while running.is_set():
-        cmd = get_keepalive()
-
-        # Important: send repeatedly, not only when the command changes.
-        send(ser, cmd, echo=False)
+        try:
+            # Send repeatedly, not only when the command changes.
+            send(transport, get_keepalive(), echo=False)
+        except (OSError, serial.SerialException) as error:
+            print(f"Connection lost while sending: {error}", file=sys.stderr)
+            running.clear()
+            return
 
         time.sleep(KEEPALIVE_INTERVAL_S)
+
+
+def receive_loop(transport):
+    while running.is_set():
+        try:
+            line = transport.read_line()
+        except (OSError, serial.SerialException) as error:
+            print(f"Connection lost while receiving: {error}", file=sys.stderr)
+            running.clear()
+            return
+
+        if line:
+            print("<", line)
 
 
 def movement_command():
@@ -105,31 +180,81 @@ def movement_command():
     return f"CMD_VEL {linear} {angular}"
 
 
-def main():
-    port = find_serial_port()
-    print(f"Opening {port} at {BAUD} baud...")
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Drive BizBot using USB serial or its local Wi-Fi network."
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("serial", "wifi"),
+        default="serial",
+        help="control connection to use (default: serial)",
+    )
+    parser.add_argument(
+        "--serial-port",
+        help="USB serial device; auto-detected when omitted",
+    )
+    parser.add_argument(
+        "--host",
+        default=DEFAULT_WIFI_HOST,
+        help=f"ESP32 Wi-Fi IP address (default: {DEFAULT_WIFI_HOST})",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_WIFI_PORT,
+        help=f"ESP32 TCP control port (default: {DEFAULT_WIFI_PORT})",
+    )
+    return parser.parse_args()
 
-    ser = serial.Serial(port, BAUD, timeout=0.1)
-    time.sleep(2)  # wait for ESP32 reset after USB connect
+
+def open_transport(args):
+    if args.transport == "wifi":
+        transport = WifiTransport(args.host, args.port)
+    else:
+        port = args.serial_port or find_serial_port()
+        transport = SerialTransport(port)
+        time.sleep(2)  # wait for the ESP32 reset after opening USB serial
+
+    print(f"Connected using {transport.description}")
+    return transport
+
+
+def main():
+    args = parse_args()
+    transport = open_transport(args)
+    keepalive_thread = None
+    receiver_thread = None
+
+    running.set()
 
     try:
-        send(ser, "ENABLE")
+        send(transport, "ENABLE")
         set_keepalive("STOP")
 
         keepalive_thread = threading.Thread(
             target=keepalive_loop,
-            args=(ser,),
+            args=(transport,),
+            daemon=True,
         )
         keepalive_thread.start()
 
+        receiver_thread = threading.Thread(
+            target=receive_loop,
+            args=(transport,),
+            daemon=True,
+        )
+        receiver_thread.start()
+
         print("Hold W/A/S/D to move. Release to stop. I = state. Q = quit.")
 
-        while True:
+        while running.is_set():
             if keyboard.is_pressed("q"):
                 break
 
             if keyboard.is_pressed("i"):
-                send(ser, "GET_STATE")
+                set_keepalive("STOP")
+                send(transport, "GET_STATE")
                 time.sleep(0.2)
             else:
                 set_keepalive(movement_command())
@@ -138,22 +263,28 @@ def main():
 
     finally:
         running.clear()
-        keepalive_thread.join(timeout=1)
+
+        if keepalive_thread:
+            keepalive_thread.join(timeout=1)
+        if receiver_thread:
+            receiver_thread.join(timeout=1)
 
         try:
-            send(ser, "STOP")
-            send(ser, "DISABLE")
+            send(transport, "STOP")
+            send(transport, "DISABLE")
+        except (OSError, serial.SerialException):
+            pass
         finally:
-            ser.close()
+            transport.close()
             print("Disconnected.")
 
 
 if __name__ == "__main__":
     try:
         main()
-    except serial.SerialException as error:
-        print(f"Serial error: {error}", file=sys.stderr)
-        print("Tip: check USB cable and set the correct port.", file=sys.stderr)
+    except (OSError, serial.SerialException) as error:
+        print(f"Connection error: {error}", file=sys.stderr)
+        print("Check the USB port or connect to the BizBot-Control Wi-Fi network.", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         print("\nInterrupted.")
