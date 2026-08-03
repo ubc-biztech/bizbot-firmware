@@ -13,4 +13,9 @@ private:
     bool ready = false;
     float pitchDeg = 0.0f;
     float pitchRateDegPerSec = 0.0f;
+    unsigned long lastReportMs = 0;
+
+    // For deriving pitch rate from RVC (which has no gyro output).
+    float prevPitchDeg = 0.0f;
+    unsigned long lastSampleUs = 0;
 };

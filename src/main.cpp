@@ -145,6 +145,13 @@ void stopRobot(const char* reason) {
 }
 
 void runControlLoop() {
+#if MOTOR_TEST
+    // UART link test: constant slow spin on both wheels, everything else
+    // bypassed (including the IMU, so it works with no sensor attached).
+    Send(0, MOTOR_TEST_SPEED);
+    return;
+#endif
+
     if (!imu.isReady()) {
         if (robotState.enabled && !latchedImuFault) {
             latchedImuFault = true;
