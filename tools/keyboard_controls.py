@@ -180,6 +180,41 @@ def movement_command():
     return f"CMD_VEL {linear} {angular}"
 
 
+def handle_tuning_input(transport):
+    """Prompt for PID gains and send SET_PID; movement pauses while typing."""
+    # Keep the robot stationary while we type. The keepalive thread keeps
+    # sending STOP in the background, so the firmware link never times out.
+    set_keepalive("STOP")
+
+    # Drop the 't' keystrokes (and anything else) already sitting in the
+    # terminal input buffer so the prompt starts empty.
+    if sys.platform != "win32":
+        import termios
+        time.sleep(0.2)  # give the held key time to be released
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+
+    print()
+    raw = input("SET_PID kp ki kd (blank to cancel): ").strip()
+
+    if not raw:
+        print("Tuning cancelled.")
+        return
+
+    parts = raw.split()
+    if len(parts) != 3:
+        print("Need exactly three numbers, e.g.: 0.08 0 0.002")
+        return
+
+    try:
+        kp, ki, kd = (float(part) for part in parts)
+    except ValueError:
+        print(f"Not numbers: {raw}")
+        return
+
+    send(transport, f"SET_PID {kp} {ki} {kd}")
+    time.sleep(0.3)  # let the response print and the T key release
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Drive BizBot using USB serial or its local Wi-Fi network."
@@ -246,13 +281,18 @@ def main():
         )
         receiver_thread.start()
 
-        print("Hold W/A/S/D to move. Release to stop. I = state. Q = quit.")
+        print(
+            "Hold W/A/S/D to move. Release to stop. "
+            "I = state. T = tune PID. Q = quit."
+        )
 
         while running.is_set():
             if keyboard.is_pressed("q"):
                 break
 
-            if keyboard.is_pressed("i"):
+            if keyboard.is_pressed("t"):
+                handle_tuning_input(transport)
+            elif keyboard.is_pressed("i"):
                 set_keepalive("STOP")
                 send(transport, "GET_STATE")
                 time.sleep(0.2)

@@ -26,6 +26,12 @@ private:
         RobotState& state
     );
 
+    void handlePidCommand(
+        const char* command,
+        Print& output,
+        RobotState& state
+    );
+
     void printState(
         Print& output,
         const RobotState& state

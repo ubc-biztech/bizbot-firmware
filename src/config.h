@@ -13,8 +13,11 @@ constexpr char WIFI_AP_SSID[] = "BizBot-Control";
 constexpr char WIFI_AP_PASSWORD[] = "bizbot-control";
 constexpr uint16_t WIFI_CONTROL_PORT = 3333;
 
-// Max hoverboard command magnitude; confirm with restrained hardware tests.
-constexpr int16_t MAX_HOVERBOARD_COMMAND = 50;
+// Max hoverboard command magnitude (EFeru range ±1000). With the balance
+// output capped at 0.20, the largest command actually sent is 0.20 * this.
+// Motors need roughly 100 to turn under no load, so 500 gives the controller
+// real authority (max ~10% power) while still restrained for testing.
+constexpr int16_t MAX_HOVERBOARD_COMMAND = 500;
 
 // Control loop timing
 constexpr uint32_t CONTROL_PERIOD_US = 5000;
@@ -93,6 +96,12 @@ constexpr float IMU_RATE_LPF_ALPHA = 0.3f;
 // Set to 1 to compile without a physical IMU (pitch stays at 0; bench use only).
 #ifndef IMU_USE_STUB
 #define IMU_USE_STUB 0
+#endif
+
+// Set to 1 to print the balance PID internals (pitch, target, P/I/D terms,
+// output, motor command) on USB serial while enabled — for gain tuning.
+#ifndef PID_DEBUG
+#define PID_DEBUG 0
 #endif
 
 // Set to 1 to bypass ALL control logic and safety gates and spin both wheels

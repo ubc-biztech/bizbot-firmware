@@ -15,7 +15,16 @@ public:
     void setOutputLimits(float minOutput, float maxOutput);
     void reset();
 
+    // Last computed terms (pre-clamp), for tuning diagnostics.
+    float lastPTerm() const { return lastP; }
+    float lastITerm() const { return lastI; }
+    float lastDTerm() const { return lastD; }
+
 private:
+    float lastP = 0.0f;
+    float lastI = 0.0f;
+    float lastD = 0.0f;
+
     float kp;
     float ki;
     float kd;

@@ -37,6 +37,10 @@ BalanceOutput BalanceController::update(
     return {speed, steer};
 }
 
+void BalanceController::setTunings(float kp, float ki, float kd) {
+    balancePid.setTunings(kp, ki, kd);
+}
+
 void BalanceController::reset() {
     balancePid.reset();
 }

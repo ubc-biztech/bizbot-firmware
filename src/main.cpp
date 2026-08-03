@@ -222,10 +222,13 @@ void updateCommandInput() {
 }
 
 void runControlLoop() {
-#if MOTOR_TEST
-    // UART link test: constant slow spin on both wheels, everything else
-    // bypassed (including the IMU, so it works with no sensor attached).
-    Send(0, MOTOR_TEST_SPEED);
+#if IMU_USE_STUB
+    // The stub reports a permanently upright robot and must never drive motors.
+    if (robotState.enabled) {
+        stopRobot("IMU_STUB");
+    } else {
+        Send(0, 0);
+    }
     return;
 #endif
 
@@ -269,6 +272,12 @@ void runControlLoop() {
         return;
     }
 
+    balanceController.setTunings(
+        robotState.balanceKp,
+        robotState.balanceKi,
+        robotState.balanceKd
+    );
+
     const BalanceOutput output = balanceController.update(
         robotState.targetLinear,
         robotState.targetAngular,
@@ -281,6 +290,30 @@ void runControlLoop() {
     const int16_t steer = normalizedToHoverboard(output.steer);
 
     Send(steer, speed);
+
+#if PID_DEBUG
+    static uint32_t lastPidDebugMs = 0;
+    const uint32_t nowMs = millis();
+    if (nowMs - lastPidDebugMs >= 200) {
+        lastPidDebugMs = nowMs;
+        DebugSerial.print("PID pitch=");
+        DebugSerial.print(robotState.pitchDeg, 2);
+        DebugSerial.print(" rate=");
+        DebugSerial.print(robotState.pitchRateDegPerSec, 1);
+        DebugSerial.print(" target=");
+        DebugSerial.print(robotState.targetLinear * MAX_LEAN_DEG, 2);
+        DebugSerial.print(" p=");
+        DebugSerial.print(balanceController.lastPTerm(), 4);
+        DebugSerial.print(" i=");
+        DebugSerial.print(balanceController.lastITerm(), 4);
+        DebugSerial.print(" d=");
+        DebugSerial.print(balanceController.lastDTerm(), 4);
+        DebugSerial.print(" out=");
+        DebugSerial.print(output.speed, 3);
+        DebugSerial.print(" cmd=");
+        DebugSerial.println(speed);
+    }
+#endif
 }
 
 void setup() {
@@ -302,6 +335,10 @@ void setup() {
     } else {
         DebugSerial.println("OK IMU_INIT");
     }
+
+    robotState.balanceKp = BALANCE_KP;
+    robotState.balanceKi = BALANCE_KI;
+    robotState.balanceKd = BALANCE_KD;
 
     robotState.lastCommandMs = millis();
     DebugSerial.println("BizBot firmware ready");

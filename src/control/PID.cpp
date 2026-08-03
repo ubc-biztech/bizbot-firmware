@@ -26,7 +26,11 @@ float PID::update(
 
     const float derivative = -measurementRate;
 
-    float output = (kp * error) + (ki * integral) + (kd * derivative);
+    lastP = kp * error;
+    lastI = ki * integral;
+    lastD = kd * derivative;
+
+    float output = lastP + lastI + lastD;
 
     if (hasOutputLimits) {
         output = constrain(output, minOutput, maxOutput);

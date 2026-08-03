@@ -84,6 +84,11 @@ void CommandParser::handleCommand(
         return;
     }
 
+    if (strncmp(command, "SET_PID ", 8) == 0) {
+        handlePidCommand(command, output, state);
+        return;
+    }
+
     if (strcmp(command, "GET_STATE") == 0) {
         state.lastCommandMs = millis();
         printState(output, state);
@@ -136,6 +141,48 @@ void CommandParser::handleVelocityCommand(
     output.println("OK CMD_VEL");
 }
 
+void CommandParser::handlePidCommand(
+    const char* command,
+    Print& output,
+    RobotState& state
+) {
+    float kp = 0.0f;
+    float ki = 0.0f;
+    float kd = 0.0f;
+    char extra = '\0';
+
+    const int parsed = sscanf(
+        command,
+        "SET_PID %f %f %f %c",
+        &kp,
+        &ki,
+        &kd,
+        &extra
+    );
+
+    if (parsed != 3) {
+        output.println("ERR INVALID_ARGUMENTS");
+        return;
+    }
+
+    // Generous sanity bounds; kp=5 already means full output at 0.2 deg error.
+    const bool outOfRange =
+        kp < 0.0f || kp > 5.0f ||
+        ki < 0.0f || ki > 5.0f ||
+        kd < 0.0f || kd > 5.0f;
+
+    if (outOfRange) {
+        output.println("ERR OUT_OF_RANGE");
+        return;
+    }
+
+    state.balanceKp = kp;
+    state.balanceKi = ki;
+    state.balanceKd = kd;
+    state.lastCommandMs = millis();
+    output.println("OK SET_PID");
+}
+
 void CommandParser::printState(
     Print& output,
     const RobotState& state
@@ -146,6 +193,12 @@ void CommandParser::printState(
     output.print(state.targetLinear, 3);
     output.print(" angular=");
     output.print(state.targetAngular, 3);
+    output.print(" kp=");
+    output.print(state.balanceKp, 4);
+    output.print(" ki=");
+    output.print(state.balanceKi, 4);
+    output.print(" kd=");
+    output.print(state.balanceKd, 4);
     output.print(" pitch=");
     output.print(state.pitchDeg, 2);
     output.print(" pitch_rate=");
