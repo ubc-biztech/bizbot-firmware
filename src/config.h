@@ -28,6 +28,9 @@ constexpr float BALANCE_KP = 0.04f;
 constexpr float BALANCE_KI = 0.0f;
 constexpr float BALANCE_KD = 0.001f;
 
+// Map PID correction to the installed motors' forward/backward direction.
+constexpr float BALANCE_MOTOR_SIGN = -1.0f;
+
 // Balance controller output limits (normalized [-1, 1])
 constexpr float MAX_LEAN_DEG = 5.0f;
 constexpr float MAX_BALANCE_OUTPUT = 0.20f;
@@ -73,7 +76,13 @@ constexpr unsigned long IMU_STALE_TIMEOUT_MS = 100;
 #define IMU_PITCH_FROM_PITCH 1
 #define IMU_PITCH_FROM_YAW   2
 constexpr int   IMU_PITCH_SOURCE = IMU_PITCH_FROM_PITCH;
-constexpr float IMU_PITCH_SIGN   = 1.0f;
+constexpr float IMU_PITCH_SIGN   = -1.0f;
+
+// The pitch the IMU reports when the robot is at its TRUE balance point
+// (center of mass over the axle). The controller balances around this value
+// instead of 0. Tune live with SET_TRIM: hold the robot at balance, read
+// pitch= from GET_STATE, and add that reading to the current trim.
+constexpr float PITCH_TRIM_DEG = 2.34f;
 
 // UART-RVC gives no gyro, so pitch rate is derived by differentiating pitch and
 // low-pass filtering. Alpha in (0,1]: higher = more responsive/noisier, lower =
@@ -114,4 +123,4 @@ constexpr float IMU_RATE_LPF_ALPHA = 0.3f;
 
 // Constant speed command sent while MOTOR_TEST=1 (EFeru range is -1000..1000;
 // wheels typically start turning around 25-50).
-constexpr int16_t MOTOR_TEST_SPEED = 100;
+constexpr int16_t MOTOR_TEST_SPEED = 200;

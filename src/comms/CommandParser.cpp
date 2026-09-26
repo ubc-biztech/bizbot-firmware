@@ -1,4 +1,6 @@
 #include "CommandParser.h"
+#include "../config.h"
+#include <math.h>
 
 namespace {
 constexpr float MIN_COMMAND_VALUE = -1.0f;
@@ -86,6 +88,38 @@ void CommandParser::handleCommand(
 
     if (strncmp(command, "SET_PID ", 8) == 0) {
         handlePidCommand(command, output, state);
+        return;
+    }
+
+    if (strcmp(command, "ZERO_IMU") == 0) {
+        if (state.lastImuUpdateMs == 0 ||
+            millis() - state.lastImuUpdateMs > IMU_STALE_TIMEOUT_MS) {
+            output.println("ERR IMU_STALE");
+            return;
+        }
+        const float trim = state.pitchTrimDeg + state.pitchDeg;
+        if (!isfinite(trim) || fabsf(trim) > 15.0f) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        if (!isfinite(state.pitchRateDegPerSec) ||
+            fabsf(state.pitchRateDegPerSec) > 5.0f) {
+            output.println("ERR IMU_MOVING");
+            return;
+        }
+        state.pitchTrimDeg = trim;
+        state.pitchDeg = 0.0f;
+        state.targetLinear = 0.0f;
+        state.targetAngular = 0.0f;
+        state.resetBalanceRequested = true;
+        state.lastCommandMs = millis();
+        output.print("OK ZERO_IMU trim=");
+        output.println(trim, 2);
+        return;
+    }
+
+    if (strncmp(command, "SET_TRIM ", 9) == 0) {
+        handleTrimCommand(command, output, state);
         return;
     }
 
@@ -183,6 +217,32 @@ void CommandParser::handlePidCommand(
     output.println("OK SET_PID");
 }
 
+void CommandParser::handleTrimCommand(
+    const char* command,
+    Print& output,
+    RobotState& state
+) {
+    float trim = 0.0f;
+    char extra = '\0';
+
+    const int parsed = sscanf(command, "SET_TRIM %f %c", &trim, &extra);
+
+    if (parsed != 1) {
+        output.println("ERR INVALID_ARGUMENTS");
+        return;
+    }
+
+    // A balance point more than 15 deg off vertical means something is wrong.
+    if (trim < -15.0f || trim > 15.0f) {
+        output.println("ERR OUT_OF_RANGE");
+        return;
+    }
+
+    state.pitchTrimDeg = trim;
+    state.lastCommandMs = millis();
+    output.println("OK SET_TRIM");
+}
+
 void CommandParser::printState(
     Print& output,
     const RobotState& state
@@ -199,6 +259,8 @@ void CommandParser::printState(
     output.print(state.balanceKi, 4);
     output.print(" kd=");
     output.print(state.balanceKd, 4);
+    output.print(" trim=");
+    output.print(state.pitchTrimDeg, 2);
     output.print(" pitch=");
     output.print(state.pitchDeg, 2);
     output.print(" pitch_rate=");

@@ -222,6 +222,10 @@ void updateCommandInput() {
 }
 
 void runControlLoop() {
+    if (robotState.resetBalanceRequested) {
+        balanceController.reset();
+        robotState.resetBalanceRequested = false;
+    }
 #if IMU_USE_STUB
     // The stub reports a permanently upright robot and must never drive motors.
     if (robotState.enabled) {
@@ -252,7 +256,7 @@ void runControlLoop() {
 
     latchedImuFault = false;
 
-    robotState.pitchDeg = imu.getPitchDeg();
+    robotState.pitchDeg = imu.getPitchDeg() - robotState.pitchTrimDeg;
     robotState.pitchRateDegPerSec = imu.getPitchRateDegPerSec();
     robotState.lastImuUpdateMs = millis();
 
@@ -294,24 +298,30 @@ void runControlLoop() {
 #if PID_DEBUG
     static uint32_t lastPidDebugMs = 0;
     const uint32_t nowMs = millis();
-    if (nowMs - lastPidDebugMs >= 200) {
+    if (nowMs - lastPidDebugMs >= 500) {
         lastPidDebugMs = nowMs;
-        DebugSerial.print("PID pitch=");
-        DebugSerial.print(robotState.pitchDeg, 2);
-        DebugSerial.print(" rate=");
-        DebugSerial.print(robotState.pitchRateDegPerSec, 1);
-        DebugSerial.print(" target=");
-        DebugSerial.print(robotState.targetLinear * MAX_LEAN_DEG, 2);
-        DebugSerial.print(" p=");
-        DebugSerial.print(balanceController.lastPTerm(), 4);
-        DebugSerial.print(" i=");
-        DebugSerial.print(balanceController.lastITerm(), 4);
-        DebugSerial.print(" d=");
-        DebugSerial.print(balanceController.lastDTerm(), 4);
-        DebugSerial.print(" out=");
-        DebugSerial.print(output.speed, 3);
-        DebugSerial.print(" cmd=");
-        DebugSerial.println(speed);
+        // Send one complete line to the active controller connection.
+        char line[256];
+        const int length = snprintf(
+            line, sizeof(line),
+            "PID pitch=%.2f target=%.2f kp=%.4f ki=%.4f kd=%.4f "
+            "p=%.4f i=%.4f d=%.4f out=%.3f cmd=%d\n",
+            robotState.pitchDeg,
+            robotState.targetLinear * MAX_LEAN_DEG,
+            robotState.balanceKp, robotState.balanceKi, robotState.balanceKd,
+            balanceController.lastPTerm(), balanceController.lastITerm(),
+            balanceController.lastDTerm(), output.speed, speed
+        );
+        if (length > 0 && length < static_cast<int>(sizeof(line))) {
+            if (wifiControlClient && wifiControlClient.connected()) {
+                wifiControlClient.write(
+                    reinterpret_cast<const uint8_t*>(line), length);
+            } else if (DebugSerial.availableForWrite() >= length) {
+                // Skip a diagnostic rather than wait for USB buffer space.
+                DebugSerial.write(
+                    reinterpret_cast<const uint8_t*>(line), length);
+            }
+        }
     }
 #endif
 }
@@ -339,6 +349,7 @@ void setup() {
     robotState.balanceKp = BALANCE_KP;
     robotState.balanceKi = BALANCE_KI;
     robotState.balanceKd = BALANCE_KD;
+    robotState.pitchTrimDeg = PITCH_TRIM_DEG;
 
     robotState.lastCommandMs = millis();
     DebugSerial.println("BizBot firmware ready");

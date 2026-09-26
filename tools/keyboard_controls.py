@@ -1,4 +1,11 @@
-"""Hold W/A/S/D to drive BizBot over USB serial or local Wi-Fi."""
+"""Hold W/A/S/D to drive BizBot over USB serial or local Wi-Fi.
+
+Setup:
+    pip install pyserial pynput
+
+macOS: System Settings → Privacy & Security → grant Accessibility AND
+Input Monitoring to the app hosting your terminal. No sudo needed.
+"""
 
 import argparse
 import socket
@@ -6,8 +13,8 @@ import sys
 import threading
 import time
 
-import keyboard
 import serial
+from pynput import keyboard as pynput_keyboard
 from serial.tools import list_ports
 
 BAUD = 115200
@@ -25,6 +32,38 @@ running.set()
 keepalive_cmd = "STOP"
 keepalive_lock = threading.Lock()
 write_lock = threading.Lock()
+
+# Characters currently held down, maintained by the pynput listener thread.
+held_keys = set()
+held_lock = threading.Lock()
+
+
+def _key_char(key):
+    """Return the lowercase character for a key press, or None for specials."""
+    try:
+        char = key.char
+    except AttributeError:
+        return None
+    return char.lower() if char else None
+
+
+def _on_press(key):
+    char = _key_char(key)
+    if char:
+        with held_lock:
+            held_keys.add(char)
+
+
+def _on_release(key):
+    char = _key_char(key)
+    if char:
+        with held_lock:
+            held_keys.discard(char)
+
+
+def is_held(char):
+    with held_lock:
+        return char in held_keys
 
 
 class SerialTransport:
@@ -156,10 +195,10 @@ def receive_loop(transport):
 
 def movement_command():
     """Return the command for currently held WASD keys, or STOP if none."""
-    forward = keyboard.is_pressed("w")
-    backward = keyboard.is_pressed("s")
-    left = keyboard.is_pressed("a")
-    right = keyboard.is_pressed("d")
+    forward = is_held("w")
+    backward = is_held("s")
+    left = is_held("a")
+    right = is_held("d")
 
     linear = 0.0
     angular = 0.0
@@ -182,7 +221,8 @@ def movement_command():
 
 def handle_tuning_input(transport):
     """Prompt for PID gains and send SET_PID; movement pauses while typing."""
-    # Keep the robot stationary while we type. The keepalive thread keeps
+    # Clear movement requests while we type; balancing remains active.
+    # The keepalive thread keeps
     # sending STOP in the background, so the firmware link never times out.
     set_keepalive("STOP")
 
@@ -194,24 +234,40 @@ def handle_tuning_input(transport):
         termios.tcflush(sys.stdin, termios.TCIFLUSH)
 
     print()
-    raw = input("SET_PID kp ki kd (blank to cancel): ").strip()
+    raw = input("kp ki kd, 'zero', or 'trim <deg>' (blank to cancel): ").strip()
+
+    if not running.is_set():
+        return
 
     if not raw:
         print("Tuning cancelled.")
         return
 
     parts = raw.split()
-    if len(parts) != 3:
-        print("Need exactly three numbers, e.g.: 0.08 0 0.002")
-        return
 
-    try:
-        kp, ki, kd = (float(part) for part in parts)
-    except ValueError:
-        print(f"Not numbers: {raw}")
-        return
+    if raw.lower() == "zero":
+        send(transport, "ZERO_IMU")
+    elif parts[0].lower() == "trim":
+        if len(parts) != 2:
+            print("Usage: trim <degrees>, e.g.: trim -2.5")
+            return
+        try:
+            trim = float(parts[1])
+        except ValueError:
+            print(f"Not a number: {parts[1]}")
+            return
+        send(transport, f"SET_TRIM {trim}")
+    else:
+        if len(parts) != 3:
+            print("Need three numbers (kp ki kd), 'zero', or 'trim <deg>'")
+            return
+        try:
+            kp, ki, kd = (float(part) for part in parts)
+        except ValueError:
+            print(f"Not numbers: {raw}")
+            return
+        send(transport, f"SET_PID {kp} {ki} {kd}")
 
-    send(transport, f"SET_PID {kp} {ki} {kd}")
     time.sleep(0.3)  # let the response print and the T key release
 
 
@@ -263,9 +319,26 @@ def main():
 
     running.set()
 
+    def on_press(key):
+        if _key_char(key) == "q":
+            # Handle this outside the main loop so Q also disables balance
+            # while the tuning prompt is blocked waiting for input.
+            set_keepalive("DISABLE")
+            running.clear()
+            try:
+                send(transport, "DISABLE")
+                print("Balance disable requested. If tuning, press Enter to exit.")
+            except (OSError, serial.SerialException) as error:
+                print(f"Could not send DISABLE: {error}", file=sys.stderr)
+            return
+        _on_press(key)
+
+    listener = pynput_keyboard.Listener(on_press=on_press, on_release=_on_release)
+
     try:
         send(transport, "ENABLE")
         set_keepalive("STOP")
+        listener.start()
 
         keepalive_thread = threading.Thread(
             target=keepalive_loop,
@@ -283,16 +356,16 @@ def main():
 
         print(
             "Hold W/A/S/D to move. Release to stop. "
-            "I = state. T = tune PID. Q = quit."
+            "I = state. T = tune PID. Q = disable balance and quit."
         )
 
         while running.is_set():
-            if keyboard.is_pressed("q"):
+            if is_held("q"):
                 break
 
-            if keyboard.is_pressed("t"):
+            if is_held("t"):
                 handle_tuning_input(transport)
-            elif keyboard.is_pressed("i"):
+            elif is_held("i"):
                 set_keepalive("STOP")
                 send(transport, "GET_STATE")
                 time.sleep(0.2)
@@ -303,6 +376,13 @@ def main():
 
     finally:
         running.clear()
+        listener.stop()
+
+        # Disable before waiting for worker threads to finish.
+        try:
+            send(transport, "DISABLE")
+        except (OSError, serial.SerialException):
+            pass
 
         if keepalive_thread:
             keepalive_thread.join(timeout=1)

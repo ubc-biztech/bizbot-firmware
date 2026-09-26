@@ -1,0 +1,10 @@
+.build/
+DerivedData/
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+server/node_modules/
+server/dist/
+server/.env
+.DS_Store
+

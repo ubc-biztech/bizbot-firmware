@@ -32,6 +32,12 @@ private:
         RobotState& state
     );
 
+    void handleTrimCommand(
+        const char* command,
+        Print& output,
+        RobotState& state
+    );
+
     void printState(
         Print& output,
         const RobotState& state

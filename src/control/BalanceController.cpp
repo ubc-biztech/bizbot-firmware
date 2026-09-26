@@ -34,7 +34,7 @@ BalanceOutput BalanceController::update(
         MAX_TURN_OUTPUT
     );
 
-    return {speed, steer};
+    return {BALANCE_MOTOR_SIGN * speed, steer};
 }
 
 void BalanceController::setTunings(float kp, float ki, float kd) {
