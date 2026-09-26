@@ -311,7 +311,7 @@ void runControlLoop() {
     if (!velocitySampleValid || velocityNowUs - lastVelocityUs >= VELOCITY_PERIOD_US) {
         lastVelocityUs = velocityNowUs; // no burst of catch-up velocity updates
         velocityOutput = calculateVelocityOutput(
-            robotState.leftWheelSpeed, robotState.rightWheelSpeed);
+            robotState.leftWheelSpeed, robotState.rightWheelSpeed, robotState.velocityKp);
         velocitySampleValid = true;
     }
 
@@ -357,16 +357,16 @@ void emitDiagnostics() {
     // While disabled, expose normalized wheels for polarity calibration.
     // While active, report the exact sample held by the outer controller.
     const VelocityOutput sample = velocitySampleValid ? velocityOutput :
-        calculateVelocityOutput(robotState.leftWheelSpeed, robotState.rightWheelSpeed);
+        calculateVelocityOutput(robotState.leftWheelSpeed, robotState.rightWheelSpeed, robotState.velocityKp);
     const float correction = velocitySampleValid ? velocityOutput.angleCorrectionDeg : 0.0f;
     const float targetRelative = robotState.targetLinear * MAX_LEAN_DEG + correction;
     char line[384];
     const int length = snprintf(
         line, sizeof(line),
-        "CTRL enabled=%d wheel_l=%.1f wheel_r=%.1f forward=%.1f vel_error=%.1f "
+        "CTRL enabled=%d vel_kp=%.5f wheel_l=%.1f wheel_r=%.1f forward=%.1f vel_error=%.1f "
         "angle_corr=%.3f target=%.3f pitch=%.3f pitch_rate_derived=%.3f "
         "motor_raw=%.4f motor_clamped=%.4f feedback_ok=%d\n",
-        robotState.enabled, sample.left, sample.right, sample.forward, sample.error,
+        robotState.enabled, robotState.velocityKp, sample.left, sample.right, sample.forward, sample.error,
         correction, robotState.pitchTrimDeg + targetRelative,
         robotState.pitchTrimDeg + robotState.pitchDeg, robotState.pitchRateDegPerSec,
         lastMotorUnclamped, lastMotorClamped,
@@ -403,6 +403,7 @@ void setup() {
         DebugSerial.println("OK IMU_INIT");
     }
 
+    robotState.velocityKp = VELOCITY_KP;
     robotState.balanceKp = BALANCE_KP;
     robotState.balanceKi = BALANCE_KI;
     robotState.balanceKd = BALANCE_KD;

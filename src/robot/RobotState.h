@@ -17,6 +17,9 @@ struct RobotState {
     float balanceKi = 0.0f;
     float balanceKd = 0.0f;
 
+    // Live velocity P gain (SET_VEL_KP); initialized from config, lost on reboot.
+    float velocityKp = 0.0f;
+
     // Balance-point offset subtracted from the raw IMU pitch (SET_TRIM).
     float pitchTrimDeg = 0.0f;
     bool resetBalanceRequested = false;

@@ -91,6 +91,12 @@ void CommandParser::handleCommand(
         return;
     }
 
+    if (strcmp(command, "SET_VEL_KP") == 0 ||
+        strncmp(command, "SET_VEL_KP ", 11) == 0) {
+        handleVelocityKpCommand(command, output, state);
+        return;
+    }
+
     if (strcmp(command, "ZERO_IMU") == 0) {
         if (state.lastImuUpdateMs == 0 ||
             millis() - state.lastImuUpdateMs > IMU_STALE_TIMEOUT_MS) {
@@ -217,6 +223,29 @@ void CommandParser::handlePidCommand(
     output.println("OK SET_PID");
 }
 
+void CommandParser::handleVelocityKpCommand(
+    const char* command,
+    Print& output,
+    RobotState& state
+) {
+    float kp = 0.0f;
+    char extra = '\0';
+    if (sscanf(command, "SET_VEL_KP %f %c", &kp, &extra) != 1) {
+        output.println("ERR INVALID_ARGUMENTS");
+        return;
+    }
+    if (!isfinite(kp) || kp < 0.0f || kp > MAX_VELOCITY_KP) {
+        output.println("ERR OUT_OF_RANGE");
+        return;
+    }
+    // Applied at the next 25 Hz velocity update; leave the fast angle PID intact.
+    // Zero disables velocity correction. This setting persists until reboot.
+    state.velocityKp = kp;
+    state.lastCommandMs = millis();
+    output.print("OK SET_VEL_KP ");
+    output.println(kp, 5);
+}
+
 void CommandParser::handleTrimCommand(
     const char* command,
     Print& output,
@@ -259,6 +288,8 @@ void CommandParser::printState(
     output.print(state.balanceKi, 4);
     output.print(" kd=");
     output.print(state.balanceKd, 4);
+    output.print(" vel_kp=");
+    output.print(state.velocityKp, 5);
     output.print(" trim=");
     output.print(state.pitchTrimDeg, 2);
     output.print(" pitch=");

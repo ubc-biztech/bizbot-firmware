@@ -54,6 +54,23 @@ robot with `FAULT MOTOR_FEEDBACK`. This additional check is needed because the
 outer loop now depends on wheel measurements. Confirm the board's feedback period
 fits this timeout. Disable, re-enable and IMU zeroing clear the held correction.
 
+## Live tuning from Python
+
+Upload the updated firmware once, then run `tools/keyboard_controls.py` as usual
+(over USB or Wi-Fi). Press **T**, type `vel 0.005`, and press Enter. Firmware replies
+`OK SET_VEL_KP 0.00500`. Press **I** to read `vel_kp` in the state response.
+`vel 0` disables the velocity correction while retaining the angle controller.
+STOP keepalives continue during the prompt, so balancing stays active and manual
+movement pauses. **Q** still disables balance while the prompt is open.
+
+The wire command is `SET_VEL_KP <gain>`. Finite values from 0 through
+`MAX_VELOCITY_KP` (currently 1.0) are accepted; this upper bound is validation,
+not a recommended tuning gain. The gain takes effect at the next outer-loop
+update (nominally within 40 ms), persists across disable/enable, and resets to
+`VELOCITY_KP` on reboot. Neither angle gains nor trim are reset. Use small changes
+and check wheel signs before enabling velocity correction. `SET_PID` / three
+numbers in the T prompt still adjust only the angle PID.
+
 ## Telemetry and timing
 
 With `PID_DEBUG=1` (enabled in the current PlatformIO configuration), `CTRL` lines
@@ -76,6 +93,7 @@ Fields:
 - `motor_raw`, `motor_clamped`: normalized speed output before/after the existing
   balance clamp, both including motor polarity. The hoverboard command is the
   clamped value multiplied by `MAX_HOVERBOARD_COMMAND` and converted to int16.
+- `vel_kp`: current live velocity proportional gain.
 - `enabled`, `feedback_ok`: control and wheel-feedback validity indicators.
 
 While enabled, velocity fields reflect the exact outer-loop sample held for

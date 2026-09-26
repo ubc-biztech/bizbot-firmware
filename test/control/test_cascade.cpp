@@ -15,6 +15,11 @@ VelocityOutput forwardSample(float left, float right) {
 }
 
 int main() {
+    // Runtime tuning takes effect without reconstructing/resetting angle control.
+    near(calculateVelocityOutput(100 / LEFT_WHEEL_VELOCITY_SIGN,
+                                 100 / RIGHT_WHEEL_VELOCITY_SIGN, 0.005f).angleCorrectionDeg, -0.5f);
+    near(calculateVelocityOutput(100 / LEFT_WHEEL_VELOCITY_SIGN,
+                                 100 / RIGHT_WHEEL_VELOCITY_SIGN, 0.0f).angleCorrectionDeg, 0.0f);
     const auto stopped = forwardSample(0, 0);
     near(stopped.error, 0);
     near(stopped.angleCorrectionDeg, 0);
