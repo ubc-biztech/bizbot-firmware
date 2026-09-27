@@ -14,8 +14,9 @@
 #include "comms/CommandParser.h"
 #include "config.h"
 #include "control/BalanceController.h"
-#include "control/VelocityController.h"
+#include "control/AccelerationFeedback.h"
 #include "hal/Imu.h"
+#include "hal/OffsetStorage.h"
 #include "robot/RobotState.h"
 
 HardwareSerial& HoverSerial = Serial2;
@@ -61,25 +62,9 @@ bool latchedImuFault = false;
 bool wasEnabled = false;
 bool wifiControlReady = false;
 bool wifiControlWasConnected = false;
-const char* pendingFault = nullptr;
-bool haveMotorFeedback = false;
-bool imuSampleHealthy = false;
-uint32_t lastVelocityUs = 0;
-bool velocitySampleValid = false;
-VelocityOutput velocityOutput{};
-float lastMotorUnclamped = 0.0f;
-float lastMotorClamped = 0.0f;
-
-void resetVelocityControl() {
-    velocityOutput = {};
-    velocitySampleValid = false;
-    lastMotorUnclamped = 0.0f;
-    lastMotorClamped = 0.0f;
-}
 
 void onEnabled() {
     balanceController.reset();
-    resetVelocityControl();
     latchedImuFault = false;
     robotState.targetLinear = 0.0f;
     robotState.targetAngular = 0.0f;
@@ -91,10 +76,7 @@ void Send(int16_t steer, int16_t speed) {
     Command.speed = speed;
     Command.checksum =
         static_cast<uint16_t>(Command.start ^ Command.steer ^ Command.speed);
-    // UART has one writer; never wait for transmit space in the 200 Hz path.
-    if (HoverSerial.availableForWrite() >= static_cast<int>(sizeof(Command))) {
-        HoverSerial.write(reinterpret_cast<uint8_t*>(&Command), sizeof(Command));
-    }
+    HoverSerial.write(reinterpret_cast<uint8_t*>(&Command), sizeof(Command));
 }
 
 void disableRobot() {
@@ -104,7 +86,6 @@ void disableRobot() {
     wasEnabled = false;
 
     balanceController.reset();
-    resetVelocityControl();
     Send(0, 0);
 }
 
@@ -147,7 +128,6 @@ void Receive() {
                 robotState.rightWheelSpeed =
                     static_cast<float>(Feedback.speedR_meas);
                 robotState.lastMotorFeedbackMs = millis();
-                haveMotorFeedback = true;
             }
 
             idx = 0;
@@ -173,8 +153,8 @@ bool tiltLimitExceeded() {
 void stopRobot(const char* reason) {
     disableRobot();
 
-    // Emit diagnostics later, outside the fast control path.
-    pendingFault = reason;
+    DebugSerial.print("FAULT ");
+    DebugSerial.println(reason);
 }
 
 void startWifiControl() {
@@ -246,7 +226,6 @@ void updateCommandInput() {
 void runControlLoop() {
     if (robotState.resetBalanceRequested) {
         balanceController.reset();
-        resetVelocityControl();
         robotState.resetBalanceRequested = false;
     }
 #if IMU_USE_STUB
@@ -268,7 +247,7 @@ void runControlLoop() {
         return;
     }
 
-    if (!imuSampleHealthy) {
+    if (!imu.update()) {
         if (!latchedImuFault) {
             latchedImuFault = true;
             stopRobot("IMU");
@@ -281,11 +260,19 @@ void runControlLoop() {
 
     robotState.pitchDeg = imu.getPitchDeg() - robotState.pitchTrimDeg;
     robotState.pitchRateDegPerSec = imu.getPitchRateDegPerSec();
+    robotState.forwardAccel = imu.getForwardAcceleration();
+    robotState.rawAccelX = imu.rawAccelX;
+    robotState.rawAccelY = imu.rawAccelY;
+    robotState.rawAccelZ = imu.rawAccelZ;
+    robotState.rawRoll = imu.rawRoll;
+    robotState.rawPitch = imu.rawPitch;
+    robotState.accelCorrection = accelerationCorrection(
+        robotState.forwardAccel, robotState.accelGain,
+        MAX_ACCEL_OUTPUT, robotState.pitchDeg);
     robotState.lastImuUpdateMs = millis();
 
     if (!robotState.enabled) {
         balanceController.reset();
-        resetVelocityControl();
         Send(0, 0);
         return;
     }
@@ -300,21 +287,6 @@ void runControlLoop() {
         return;
     }
 
-    // A stale wheel sample must never hold an old braking lean indefinitely.
-    if (!haveMotorFeedback ||
-        millis() - robotState.lastMotorFeedbackMs > MOTOR_FEEDBACK_TIMEOUT_MS) {
-        stopRobot("MOTOR_FEEDBACK");
-        return;
-    }
-
-    const uint32_t velocityNowUs = micros();
-    if (!velocitySampleValid || velocityNowUs - lastVelocityUs >= VELOCITY_PERIOD_US) {
-        lastVelocityUs = velocityNowUs; // no burst of catch-up velocity updates
-        velocityOutput = calculateVelocityOutput(
-            robotState.leftWheelSpeed, robotState.rightWheelSpeed, robotState.velocityKp);
-        velocitySampleValid = true;
-    }
-
     balanceController.setTunings(
         robotState.balanceKp,
         robotState.balanceKi,
@@ -326,66 +298,54 @@ void runControlLoop() {
         robotState.targetAngular,
         robotState.pitchDeg,
         robotState.pitchRateDegPerSec,
-        CONTROL_DT_SECONDS,
-        velocityOutput.angleCorrectionDeg
+        CONTROL_DT_SECONDS
     );
 
-    const int16_t speed = normalizedToHoverboard(output.speed);
+    const float correctedSpeed = constrain(
+        output.speed + FORWARD_MOTOR_SIGN * robotState.accelCorrection,
+        -MAX_BALANCE_OUTPUT, MAX_BALANCE_OUTPUT);
+    const int16_t speed = normalizedToHoverboard(correctedSpeed);
     const int16_t steer = normalizedToHoverboard(output.steer);
 
-    lastMotorUnclamped = output.unclampedSpeed;
-    lastMotorClamped = output.speed;
     Send(steer, speed);
-}
 
-void emitDiagnostics() {
-    if (pendingFault) {
-        char line[64];
-        const int length = snprintf(line, sizeof(line), "FAULT %s\n", pendingFault);
-        if (length > 0 && length < static_cast<int>(sizeof(line)) &&
-            DebugSerial.availableForWrite() >= length) {
-            DebugSerial.write(reinterpret_cast<const uint8_t*>(line), length);
-            pendingFault = nullptr;
-        }
-    }
 #if PID_DEBUG
-    static uint32_t lastTelemetryMs = 0;
+    static uint32_t lastPidDebugMs = 0;
     const uint32_t nowMs = millis();
-    if (nowMs - lastTelemetryMs < CONTROL_TELEMETRY_PERIOD_MS) return;
-    lastTelemetryMs = nowMs;
-
-    // While disabled, expose normalized wheels for polarity calibration.
-    // While active, report the exact sample held by the outer controller.
-    const VelocityOutput sample = velocitySampleValid ? velocityOutput :
-        calculateVelocityOutput(robotState.leftWheelSpeed, robotState.rightWheelSpeed, robotState.velocityKp);
-    const float correction = velocitySampleValid ? velocityOutput.angleCorrectionDeg : 0.0f;
-    const float targetRelative = robotState.targetLinear * MAX_LEAN_DEG + correction;
-    char line[384];
-    const int length = snprintf(
-        line, sizeof(line),
-        "CTRL enabled=%d vel_kp=%.5f wheel_l=%.1f wheel_r=%.1f forward=%.1f vel_error=%.1f "
-        "angle_corr=%.3f target=%.3f pitch=%.3f pitch_rate_derived=%.3f "
-        "motor_raw=%.4f motor_clamped=%.4f feedback_ok=%d\n",
-        robotState.enabled, robotState.velocityKp, sample.left, sample.right, sample.forward, sample.error,
-        correction, robotState.pitchTrimDeg + targetRelative,
-        robotState.pitchTrimDeg + robotState.pitchDeg, robotState.pitchRateDegPerSec,
-        lastMotorUnclamped, lastMotorClamped,
-        haveMotorFeedback && nowMs - robotState.lastMotorFeedbackMs <= MOTOR_FEEDBACK_TIMEOUT_MS
-    );
-    // USB only, including during Wi-Fi control: TCP writes can block. Drop a
-    // whole diagnostic line if the UART buffer lacks room; never wait or flush.
-    if (length > 0 && length < static_cast<int>(sizeof(line)) &&
-        DebugSerial.availableForWrite() >= length) {
-        DebugSerial.write(reinterpret_cast<const uint8_t*>(line), length);
+    if (nowMs - lastPidDebugMs >= 500) {
+        lastPidDebugMs = nowMs;
+        // Send one complete line to the active controller connection.
+        char line[256];
+        const int length = snprintf(
+            line, sizeof(line),
+            "PID pitch=%.2f trim=%.2f target=%.2f kp=%.4f ki=%.4f kd=%.4f "
+            "p=%.4f i=%.4f d=%.4f out=%.3f cmd=%d accel=%.3f ka=%.3f acorr=%.3f\n",
+            robotState.pitchDeg,
+            robotState.pitchTrimDeg,
+            robotState.targetLinear * MAX_LEAN_DEG,
+            robotState.balanceKp, robotState.balanceKi, robotState.balanceKd,
+            balanceController.lastPTerm(), balanceController.lastITerm(),
+            balanceController.lastDTerm(), correctedSpeed, speed,
+            robotState.forwardAccel, robotState.accelGain, robotState.accelCorrection
+        );
+        if (length > 0 && length < static_cast<int>(sizeof(line))) {
+            if (wifiControlClient && wifiControlClient.connected()) {
+                wifiControlClient.write(
+                    reinterpret_cast<const uint8_t*>(line), length);
+            } else if (DebugSerial.availableForWrite() >= length) {
+                // Skip a diagnostic rather than wait for USB buffer space.
+                DebugSerial.write(
+                    reinterpret_cast<const uint8_t*>(line), length);
+            }
+        }
     }
 #endif
 }
 
 void setup() {
-    DebugSerial.setTxBufferSize(1024);
+    DebugSerial.setTxBufferSize(512);
     DebugSerial.begin(115200);
 
-    HoverSerial.setTxBufferSize(256);
     HoverSerial.begin(
         HOVER_SERIAL_BAUD,
         SERIAL_8N1,
@@ -403,11 +363,11 @@ void setup() {
         DebugSerial.println("OK IMU_INIT");
     }
 
-    robotState.velocityKp = VELOCITY_KP;
     robotState.balanceKp = BALANCE_KP;
     robotState.balanceKi = BALANCE_KI;
     robotState.balanceKd = BALANCE_KD;
-    robotState.pitchTrimDeg = PITCH_TRIM_DEG;
+    robotState.accelGain = ACCEL_GAIN;
+    robotState.pitchTrimDeg = loadPitchOffset(PITCH_TRIM_DEG);
 
     robotState.lastCommandMs = millis();
     DebugSerial.println("BizBot firmware ready");
@@ -422,14 +382,10 @@ void loop() {
     wasEnabled = robotState.enabled;
 
     Receive();
-    // Read/diagnose IMU outside the fast controller (including optional Euler logs).
-    // runControlLoop consumes the latest sample below.
-    imuSampleHealthy = imu.isReady() && imu.update();
 
     const uint32_t now = micros();
     if (now - lastControlUs >= CONTROL_PERIOD_US) {
         lastControlUs += CONTROL_PERIOD_US;
         runControlLoop();
     }
-    emitDiagnostics();
 }

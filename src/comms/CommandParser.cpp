@@ -1,5 +1,6 @@
 #include "CommandParser.h"
 #include "../config.h"
+#include "../hal/OffsetStorage.h"
 #include <math.h>
 
 namespace {
@@ -91,9 +92,28 @@ void CommandParser::handleCommand(
         return;
     }
 
-    if (strcmp(command, "SET_VEL_KP") == 0 ||
-        strncmp(command, "SET_VEL_KP ", 11) == 0) {
-        handleVelocityKpCommand(command, output, state);
+    if (strncmp(command, "SET_ACCEL ", 10) == 0) {
+        float gain = 0.0f;
+        char extra = '\0';
+        if (sscanf(command, "SET_ACCEL %f %c", &gain, &extra) != 1) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        if (!isfinite(gain) || gain < 0.0f || gain > MAX_ACCEL_GAIN) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        if (gain > 0.0f && (state.lastImuUpdateMs == 0 ||
+            millis() - state.lastImuUpdateMs > IMU_STALE_TIMEOUT_MS ||
+            !isfinite(state.forwardAccel) || fabsf(state.forwardAccel) > 0.5f)) {
+            output.println("ERR ACCEL_NOT_NEUTRAL");
+            return;
+        }
+        state.accelGain = gain;
+        state.resetBalanceRequested = true;
+        state.lastCommandMs = millis();
+        output.print("OK SET_ACCEL ka=");
+        output.println(gain, 3);
         return;
     }
 
@@ -111,6 +131,10 @@ void CommandParser::handleCommand(
         if (!isfinite(state.pitchRateDegPerSec) ||
             fabsf(state.pitchRateDegPerSec) > 5.0f) {
             output.println("ERR IMU_MOVING");
+            return;
+        }
+        if (!savePitchOffset(trim)) {
+            output.println("ERR OFFSET_SAVE_FAILED");
             return;
         }
         state.pitchTrimDeg = trim;
@@ -223,29 +247,6 @@ void CommandParser::handlePidCommand(
     output.println("OK SET_PID");
 }
 
-void CommandParser::handleVelocityKpCommand(
-    const char* command,
-    Print& output,
-    RobotState& state
-) {
-    float kp = 0.0f;
-    char extra = '\0';
-    if (sscanf(command, "SET_VEL_KP %f %c", &kp, &extra) != 1) {
-        output.println("ERR INVALID_ARGUMENTS");
-        return;
-    }
-    if (!isfinite(kp) || kp < 0.0f || kp > MAX_VELOCITY_KP) {
-        output.println("ERR OUT_OF_RANGE");
-        return;
-    }
-    // Applied at the next 25 Hz velocity update; leave the fast angle PID intact.
-    // Zero disables velocity correction. This setting persists until reboot.
-    state.velocityKp = kp;
-    state.lastCommandMs = millis();
-    output.print("OK SET_VEL_KP ");
-    output.println(kp, 5);
-}
-
 void CommandParser::handleTrimCommand(
     const char* command,
     Print& output,
@@ -262,14 +263,21 @@ void CommandParser::handleTrimCommand(
     }
 
     // A balance point more than 15 deg off vertical means something is wrong.
-    if (trim < -15.0f || trim > 15.0f) {
+    if (!isfinite(trim) || trim < -15.0f || trim > 15.0f) {
         output.println("ERR OUT_OF_RANGE");
         return;
     }
 
+    if (!savePitchOffset(trim)) {
+        output.println("ERR OFFSET_SAVE_FAILED");
+        return;
+    }
+    state.pitchDeg += state.pitchTrimDeg - trim;
     state.pitchTrimDeg = trim;
+    state.resetBalanceRequested = true;
     state.lastCommandMs = millis();
-    output.println("OK SET_TRIM");
+    output.print("OK SET_TRIM trim=");
+    output.println(trim, 2);
 }
 
 void CommandParser::printState(
@@ -288,14 +296,23 @@ void CommandParser::printState(
     output.print(state.balanceKi, 4);
     output.print(" kd=");
     output.print(state.balanceKd, 4);
-    output.print(" vel_kp=");
-    output.print(state.velocityKp, 5);
     output.print(" trim=");
     output.print(state.pitchTrimDeg, 2);
     output.print(" pitch=");
     output.print(state.pitchDeg, 2);
     output.print(" pitch_rate=");
     output.print(state.pitchRateDegPerSec, 2);
+    output.print(" accel=");
+    output.print(state.forwardAccel, 3);
+    output.print(" ka=");
+    output.print(state.accelGain, 3);
+    output.print(" acorr=");
+    output.print(state.accelCorrection, 3);
+    output.print(" ax="); output.print(state.rawAccelX, 3);
+    output.print(" ay="); output.print(state.rawAccelY, 3);
+    output.print(" az="); output.print(state.rawAccelZ, 3);
+    output.print(" raw_roll="); output.print(state.rawRoll, 2);
+    output.print(" raw_pitch="); output.print(state.rawPitch, 2);
     output.print(" battery=");
     output.print(state.batteryVoltage, 2);
     output.print(" wheel_l=");

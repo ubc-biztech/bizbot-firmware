@@ -8,7 +8,7 @@ Input Monitoring to the app hosting your terminal. No sudo needed.
 """
 
 import argparse
-import math
+from collections import deque
 import socket
 import sys
 import threading
@@ -33,6 +33,34 @@ running.set()
 keepalive_cmd = "STOP"
 keepalive_lock = threading.Lock()
 write_lock = threading.Lock()
+console_lock = threading.Lock()
+console_paused = False
+deferred_messages = deque(maxlen=32)
+
+
+def background_print(*args, telemetry=False, **kwargs):
+    """Drain telemetry silently during input; defer command replies/errors."""
+    with console_lock:
+        if console_paused:
+            if not telemetry:
+                deferred_messages.append((args, kwargs))
+            return
+        print(*args, **kwargs)
+
+
+def pause_console():
+    global console_paused
+    with console_lock:
+        console_paused = True
+
+
+def resume_console():
+    global console_paused
+    with console_lock:
+        console_paused = False
+        while deferred_messages:
+            args, kwargs = deferred_messages.popleft()
+            print(*args, **kwargs)
 
 # Characters currently held down, maintained by the pynput listener thread.
 held_keys = set()
@@ -150,7 +178,7 @@ def find_serial_port():
 
 def send(transport, cmd, echo=True):
     if echo:
-        print(">", cmd)
+        background_print(">", cmd)
 
     with write_lock:
         transport.send_line(cmd)
@@ -174,7 +202,7 @@ def keepalive_loop(transport):
             # Send repeatedly, not only when the command changes.
             send(transport, get_keepalive(), echo=False)
         except (OSError, serial.SerialException) as error:
-            print(f"Connection lost while sending: {error}", file=sys.stderr)
+            background_print(f"Connection lost while sending: {error}", file=sys.stderr)
             running.clear()
             return
 
@@ -186,12 +214,12 @@ def receive_loop(transport):
         try:
             line = transport.read_line()
         except (OSError, serial.SerialException) as error:
-            print(f"Connection lost while receiving: {error}", file=sys.stderr)
+            background_print(f"Connection lost while receiving: {error}", file=sys.stderr)
             running.clear()
             return
 
-        if line:
-            print("<", line)
+        if line and line.strip() != "OK STOP":
+            background_print("<", line, telemetry=line.startswith(("PID ", "STATE ")))
 
 
 def movement_command():
@@ -221,21 +249,25 @@ def movement_command():
 
 
 def handle_tuning_input(transport):
-    """Prompt for angle/velocity tuning; STOP keepalives continue while typing."""
+    """Prompt for PID gains and send SET_PID; movement pauses while typing."""
     # Clear movement requests while we type; balancing remains active.
     # The keepalive thread keeps
     # sending STOP in the background, so the firmware link never times out.
     set_keepalive("STOP")
 
-    # Drop the 't' keystrokes (and anything else) already sitting in the
-    # terminal input buffer so the prompt starts empty.
-    if sys.platform != "win32":
-        import termios
-        time.sleep(0.2)  # give the held key time to be released
-        termios.tcflush(sys.stdin, termios.TCIFLUSH)
-
-    print()
-    raw = input("kp ki kd, 'vel <kp>', 'zero', or 'trim <deg>' (blank to cancel): ").strip()
+    pause_console()
+    try:
+        # Drop the 't' keystrokes (and anything else) already sitting in the
+        # terminal input buffer so the prompt starts empty.
+        if sys.platform != "win32":
+            import termios
+            time.sleep(0.2)  # give the held key time to be released
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    
+        print()
+        raw = input("kp ki kd, 'zero', 'offset <deg>', or 'accel <gain>' (blank to cancel): ").strip()
+    finally:
+        resume_console()
 
     if not running.is_set():
         return
@@ -248,32 +280,35 @@ def handle_tuning_input(transport):
 
     if raw.lower() == "zero":
         send(transport, "ZERO_IMU")
-    elif parts[0].lower() == "vel":
+    elif parts[0].lower() == "accel":
         if len(parts) != 2:
-            print("Usage: vel <kp>, e.g.: vel 0.005 (vel 0 disables velocity correction)")
+            print("Usage: accel <gain>; accel 0 disables acceleration feedback")
             return
         try:
-            kp = float(parts[1])
+            gain = float(parts[1])
         except ValueError:
-            print(f"Not a number: {parts[1]}")
+            print("Acceleration gain must be a number")
             return
-        if not math.isfinite(kp) or kp < 0:
-            print("Velocity Kp must be finite and nonnegative.")
+        if not 0.0 <= gain <= 0.1:
+            print("Acceleration gain must be between 0 and 0.1")
             return
-        send(transport, f"SET_VEL_KP {kp}")
-    elif parts[0].lower() == "trim":
+        send(transport, f"SET_ACCEL {gain}")
+    elif parts[0].lower() in ("trim", "offset"):
         if len(parts) != 2:
-            print("Usage: trim <degrees>, e.g.: trim -2.5")
+            print("Usage: offset <degrees>, e.g.: offset -2.5 (sets the absolute offset)")
             return
         try:
             trim = float(parts[1])
         except ValueError:
             print(f"Not a number: {parts[1]}")
             return
+        if not -15.0 <= trim <= 15.0:
+            print("Offset must be between -15 and 15 degrees")
+            return
         send(transport, f"SET_TRIM {trim}")
     else:
         if len(parts) != 3:
-            print("Need three numbers (kp ki kd), 'vel <kp>', 'zero', or 'trim <deg>'")
+            print("Need kp ki kd, 'zero', 'offset <deg>', or 'accel <gain>'")
             return
         try:
             kp, ki, kd = (float(part) for part in parts)
@@ -341,9 +376,9 @@ def main():
             running.clear()
             try:
                 send(transport, "DISABLE")
-                print("Balance disable requested. If tuning, press Enter to exit.")
+                background_print("Balance disable requested.")
             except (OSError, serial.SerialException) as error:
-                print(f"Could not send DISABLE: {error}", file=sys.stderr)
+                background_print(f"Could not send DISABLE: {error}", file=sys.stderr)
             return
         _on_press(key)
 
@@ -370,7 +405,7 @@ def main():
 
         print(
             "Hold W/A/S/D to move. Release to stop. "
-            "I = state. T = tune (angle PID or vel <kp>). Q = disable balance and quit."
+            "I = state. T = tune PID. Q = disable balance and quit."
         )
 
         while running.is_set():

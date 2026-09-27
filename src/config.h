@@ -23,31 +23,6 @@ constexpr int16_t MAX_HOVERBOARD_COMMAND = 500;
 constexpr uint32_t CONTROL_PERIOD_US = 5000;
 constexpr float CONTROL_DT_SECONDS = 0.005f;
 
-// Outer stationary-velocity loop: raw hoverboard feedback units (NOT m/s).
-// Units and installed wheel polarity are unverified. Push the disabled robot
-// forward and set EACH wheel sign so its normalized reading is positive.
-constexpr float LEFT_WHEEL_VELOCITY_SIGN = 1.0f;  // provisional; verify on robot
-constexpr float RIGHT_WHEEL_VELOCITY_SIGN = 1.0f; // provisional; verify on robot
-constexpr uint32_t VELOCITY_PERIOD_US = 40000;   // 25 Hz, held between updates
-constexpr float TARGET_FORWARD_VELOCITY = 0.0f;
-constexpr float VELOCITY_KP = 0.01f; // boot default; degrees / raw speed unit
-constexpr float MAX_VELOCITY_KP = 1.0f; // live command validation limit, not a tuning target
-constexpr float VELOCITY_KI = 0.0f;  // P-only: no integral state accumulated
-constexpr float VELOCITY_KD = 0.0f;  // P-only: no derivative term
-// Positive pitch means forward lean. With error = target - forward velocity,
-// +1 makes forward motion produce negative (backward) target lean.
-// Independent of BALANCE_MOTOR_SIGN: do not use motor polarity to normalize speed.
-constexpr float VELOCITY_ANGLE_SIGN = 1.0f;
-constexpr float MAX_VELOCITY_LEAN_DEG = 5.0f;
-constexpr uint32_t MOTOR_FEEDBACK_TIMEOUT_MS = 250;
-constexpr uint32_t CONTROL_TELEMETRY_PERIOD_MS = 100; // 10 Hz, USB only
-static_assert(VELOCITY_KI == 0.0f && VELOCITY_KD == 0.0f,
-              "Velocity controller is P-only; implement I/D before enabling gains");
-static_assert((LEFT_WHEEL_VELOCITY_SIGN == 1.0f || LEFT_WHEEL_VELOCITY_SIGN == -1.0f) &&
-              (RIGHT_WHEEL_VELOCITY_SIGN == 1.0f || RIGHT_WHEEL_VELOCITY_SIGN == -1.0f) &&
-              (VELOCITY_ANGLE_SIGN == 1.0f || VELOCITY_ANGLE_SIGN == -1.0f),
-              "Velocity signs must be +1 or -1");
-
 // Balance PID placeholders — tune on the physical robot with restrained output.
 constexpr float BALANCE_KP = 0.04f;
 constexpr float BALANCE_KI = 0.0f;
@@ -114,6 +89,17 @@ constexpr float PITCH_TRIM_DEG = 2.34f;
 // smoother/laggier. Rate inherits IMU_PITCH_SIGN via pitchDeg, so no rate sign.
 constexpr float IMU_RATE_LPF_ALPHA = 0.3f;
 
+// Side-mounted RVC module: sensor Y is fore/aft, gravity is near +X at rest.
+// Verify stationary tilted readings and forward sign after remounting.
+constexpr float IMU_FORWARD_ACCEL_SIGN = 1.0f;
+constexpr float IMU_ACCEL_FILTER_SECONDS = 0.10f;
+// Normalized motor correction per m/s^2. Enable live with SET_ACCEL after
+// verifying mounting; zero preserves the existing balance controller.
+constexpr float ACCEL_GAIN = 0.0f;
+constexpr float MAX_ACCEL_GAIN = 0.1f;
+constexpr float MAX_ACCEL_OUTPUT = 0.03f;
+constexpr float FORWARD_MOTOR_SIGN = 1.0f;
+
 // Set to 1 to periodically print roll/pitch/yaw + derived rate for the
 // orientation calibration above. Leave at 0 for normal operation.
 #ifndef IMU_DEBUG_EULER
@@ -132,7 +118,8 @@ constexpr float IMU_RATE_LPF_ALPHA = 0.3f;
 #define IMU_USE_STUB 0
 #endif
 
-// Set to 1 to emit 10 Hz control telemetry on USB serial outside the fast loop.
+// Set to 1 to print the balance PID internals (pitch, target, P/I/D terms,
+// output, motor command) on USB serial while enabled — for gain tuning.
 #ifndef PID_DEBUG
 #define PID_DEBUG 0
 #endif

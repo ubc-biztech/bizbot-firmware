@@ -1,6 +1,7 @@
 #include "Imu.h"
 
 #include "../config.h"
+#include "../control/AccelerationFeedback.h"
 
 #include <Arduino.h>
 
@@ -102,6 +103,11 @@ bool Imu::update() {
     }
 
     if (gotReport) {
+        rawAccelX = packet.x_accel;
+        rawAccelY = packet.y_accel;
+        rawAccelZ = packet.z_accel;
+        rawRoll = packet.roll;
+        rawPitch = packet.pitch;
         pitchDeg = IMU_PITCH_SIGN *
                    selectPitchDeg(packet.roll, packet.pitch, packet.yaw);
 
@@ -109,6 +115,13 @@ bool Imu::update() {
         // low-pass filtering. Rate inherits the sign already baked into pitchDeg.
         const unsigned long nowUs = micros();
         const float dt = (nowUs - lastSampleUs) * 1e-6f;
+        const float acceleration = IMU_FORWARD_ACCEL_SIGN *
+            horizontalAcceleration(packet.x_accel, packet.y_accel,
+                                   packet.z_accel, packet.roll, packet.pitch);
+        if (!isfinite(acceleration)) return false;
+        // Filter only on new sensor reports; use elapsed sensor time.
+        const float alpha = dt / (IMU_ACCEL_FILTER_SECONDS + dt);
+        forwardAcceleration += alpha * (acceleration - forwardAcceleration);
         if (lastSampleUs != 0 && dt > 0.0f) {
             const float rawRate = (pitchDeg - prevPitchDeg) / dt;
             pitchRateDegPerSec +=

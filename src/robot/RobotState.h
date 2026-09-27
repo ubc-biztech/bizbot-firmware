@@ -10,6 +10,11 @@ struct RobotState {
 
     float pitchDeg = 0.0f;
     float pitchRateDegPerSec = 0.0f;
+    float forwardAccel = 0.0f;
+    float accelGain = 0.0f;
+    float accelCorrection = 0.0f;
+    float rawAccelX = 0, rawAccelY = 0, rawAccelZ = 0;
+    float rawRoll = 0, rawPitch = 0;
 
     // Live-tunable balance gains (initialized from config in setup(); SET_PID
     // changes them at runtime, lost on reboot).
@@ -17,10 +22,7 @@ struct RobotState {
     float balanceKi = 0.0f;
     float balanceKd = 0.0f;
 
-    // Live velocity P gain (SET_VEL_KP); initialized from config, lost on reboot.
-    float velocityKp = 0.0f;
-
-    // Balance-point offset subtracted from the raw IMU pitch (SET_TRIM).
+    // Persistent balance-point offset (SET_TRIM / ZERO_IMU), loaded from NVS.
     float pitchTrimDeg = 0.0f;
     bool resetBalanceRequested = false;
 

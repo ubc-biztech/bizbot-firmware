@@ -5,7 +5,6 @@
 struct BalanceOutput {
     float speed;
     float steer;
-    float unclampedSpeed; // normalized motor output, including BALANCE_MOTOR_SIGN
 };
 
 class BalanceController {
@@ -17,8 +16,7 @@ public:
         float targetAngular,
         float pitchDeg,
         float pitchRateDegPerSec,
-        float dtSeconds,
-        float velocityAngleCorrectionDeg = 0.0f
+        float dtSeconds
     );
 
     void setTunings(float kp, float ki, float kd);
