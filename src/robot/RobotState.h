@@ -22,6 +22,14 @@ struct RobotState {
     float balanceKi = 0.0f;
     float balanceKd = 0.0f;
 
+    // Outer velocity loop (SET_VEL / SET_VEL_SIGN), see config.h.
+    float velKp = 0.0f;
+    float velKi = 0.0f;
+    float velSign = -1.0f;
+    float wheelVelocity = 0.0f;      // mean wheel RPM, forward positive
+    float velIntegral = 0.0f;        // integrated velocity error
+    float targetPitchDeg = 0.0f;     // what the angle loop is tracking
+
     // Persistent balance-point offset (SET_TRIM / ZERO_IMU), loaded from NVS.
     float pitchTrimDeg = 0.0f;
     bool resetBalanceRequested = false;

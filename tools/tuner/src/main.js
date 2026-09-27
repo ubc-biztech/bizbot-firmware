@@ -70,6 +70,11 @@ function handle(msg) {
   if (line.startsWith("FAULT")) showFault(line);
   if (line.startsWith("ERR")) showFault(line, true);
   if (line.startsWith("OK ENABLED")) hideFault();
+  if (line === "OK SET_VEL_SIGN" && pendingVelSign !== null) {
+    velSign = pendingVelSign;
+    pendingVelSign = null;
+    renderVsign();
+  }
 }
 
 
@@ -133,6 +138,10 @@ const rows = {
     { key: "kp", steps: [0.001, 0.005, 0.01, 0.02], def: 0.01, min: 0, max: 5, send: sendPid },
     { key: "ki", steps: [0.0005, 0.001, 0.005], def: 0.001, min: 0, max: 5, send: sendPid },
     { key: "kd", steps: [0.0001, 0.0005, 0.001, 0.002], def: 0.0005, min: 0, max: 5, send: sendPid },
+  ],
+  "vel-gains": [
+    { key: "vkp", steps: [0.01, 0.02, 0.05, 0.1], def: 0.02, min: 0, max: 1, send: sendVel },
+    { key: "vki", steps: [0.01, 0.02, 0.05, 0.1], def: 0.02, min: 0, max: 1, send: sendVel },
   ],
   "trim-gains": [
     { key: "trim", steps: [0.1, 0.25, 0.5, 1], def: 0.25, min: -15, max: 15, send: sendTrim },
@@ -253,6 +262,12 @@ function setPill(id, text, on, cls = "on") {
 
 // --- wiring ------------------------------------------------------------------
 $("btn-zero").onclick = () => send("ZERO_IMU");
+// Firmware boots with VEL_SIGN -1 and STATE does not report it, so track it here.
+let velSign = -1;
+let pendingVelSign = null;
+function renderVsign() { $("btn-vsign").textContent = `Sign ${velSign > 0 ? "+1" : "−1"} (flip)`; }
+$("btn-vsign").onclick = () => { pendingVelSign = -velSign; send(`SET_VEL_SIGN ${pendingVelSign}`); };
+renderVsign();
 // --- presets (localStorage) ---------------------------------------------------
 const PRESET_KEY = "bizbot-presets";
 function loadPresets() {

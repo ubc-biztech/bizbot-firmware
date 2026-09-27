@@ -33,8 +33,27 @@ constexpr float BALANCE_MOTOR_SIGN = -1.0f;
 
 // Balance controller output limits (normalized [-1, 1])
 constexpr float MAX_LEAN_DEG = 5.0f;
-constexpr float MAX_BALANCE_OUTPUT = 0.20f;
+constexpr float MAX_BALANCE_OUTPUT = 0.30f;
 constexpr float MAX_TURN_OUTPUT = 0.15f;
+
+// Outer wheel-velocity loop: mean wheel RPM -> target pitch (deg).
+//   target_pitch = VEL_SIGN * (kp * v_err + ki * integral(v_err)), v_err = v_target - v_measured
+// Both gains default to 0, which leaves the angle-only behaviour of main
+// untouched. Tune live with SET_VEL <kp> <ki>. Physics says "moving forward
+// -> lean back", so VEL_SIGN should end up such that a positive measured
+// velocity lowers the target pitch; flip VEL_SIGN via SET_VEL_SIGN if the
+// robot runs away instead of stopping.
+constexpr float VEL_KP = 0.0f;
+constexpr float VEL_KI = 0.0f;
+constexpr float VEL_SIGN = -1.0f;
+// Right wheel RPM feedback is mirrored (MOTOR_TEST 80 reads L +25, R -31).
+constexpr float WHEEL_RIGHT_SIGN = -1.0f;
+// Wheel RPM commanded by CMD_VEL linear=1.0 when the velocity loop is active.
+constexpr float MAX_WHEEL_RPM = 60.0f;
+// The outer loop may never ask for more lean than this.
+constexpr float MAX_VEL_LEAN_DEG = 3.0f;
+// Wheel feedback older than this freezes the outer loop (never gates balance).
+constexpr unsigned long WHEEL_FEEDBACK_STALE_MS = 200;
 
 // Laptop keepalive should be faster than this (keyboard_controls.py uses 200 ms).
 constexpr unsigned long COMMAND_TIMEOUT_MS = 500;

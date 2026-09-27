@@ -153,6 +153,42 @@ void CommandParser::handleCommand(
         return;
     }
 
+    if (strncmp(command, "SET_VEL ", 8) == 0) {
+        float kp = 0.0f, ki = 0.0f;
+        char extra = '\0';
+        if (sscanf(command, "SET_VEL %f %f %c", &kp, &ki, &extra) != 2) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        // deg per RPM; 1.0 would be 60 deg at 60 RPM, far past sane.
+        if (!isfinite(kp) || !isfinite(ki) || kp < 0.0f || kp > 1.0f ||
+            ki < 0.0f || ki > 1.0f) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        state.velKp = kp;
+        state.velKi = ki;
+        state.velIntegral = 0.0f;
+        state.lastCommandMs = millis();
+        output.println("OK SET_VEL");
+        return;
+    }
+
+    if (strncmp(command, "SET_VEL_SIGN ", 13) == 0) {
+        float sign = 0.0f;
+        char extra = '\0';
+        if (sscanf(command, "SET_VEL_SIGN %f %c", &sign, &extra) != 1 ||
+            (sign != 1.0f && sign != -1.0f)) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        state.velSign = sign;
+        state.velIntegral = 0.0f;
+        state.lastCommandMs = millis();
+        output.println("OK SET_VEL_SIGN");
+        return;
+    }
+
     if (strcmp(command, "GET_STATE") == 0) {
         state.lastCommandMs = millis();
         printState(output, state);

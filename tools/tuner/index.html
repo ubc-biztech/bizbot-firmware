@@ -35,6 +35,12 @@
 
 
       <section class="card">
+        <h2>Velocity loop <small>SET_VEL</small> <button id="btn-vsign" class="mini">Flip sign</button></h2>
+        <div class="gains" id="vel-gains"></div>
+        <p class="hint">Wheel RPM → target lean (deg per RPM, capped at 3°). Both 0 = off. Resets to 0 on robot reboot. Check wheel L/R move when you push the robot first. Start vkp 0.05, then vki 0.02. Runs away instead of stopping = flip sign.</p>
+      </section>
+
+      <section class="card">
         <h2>Trim <small>SET_TRIM / ZERO_IMU</small></h2>
         <div class="gains" id="trim-gains"></div>
         <p class="hint">Zero IMU makes the current angle the balance point. Saved to flash.</p>

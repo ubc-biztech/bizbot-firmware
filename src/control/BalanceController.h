@@ -12,7 +12,7 @@ public:
     BalanceController(float kp, float ki, float kd);
 
     BalanceOutput update(
-        float targetLinear,
+        float targetPitchDeg,
         float targetAngular,
         float pitchDeg,
         float pitchRateDegPerSec,

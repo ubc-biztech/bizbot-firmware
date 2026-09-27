@@ -13,13 +13,12 @@ BalanceController::BalanceController(float kp, float ki, float kd)
 }
 
 BalanceOutput BalanceController::update(
-    float targetLinear,
+    float targetPitchDeg,
     float targetAngular,
     float pitchDeg,
     float pitchRateDegPerSec,
     float dtSeconds
 ) {
-    const float targetPitchDeg = targetLinear * MAX_LEAN_DEG;
 
     const float speed = balancePid.update(
         targetPitchDeg,

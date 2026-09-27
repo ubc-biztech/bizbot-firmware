@@ -81,6 +81,8 @@ void Send(int16_t steer, int16_t speed) {
 
 void disableRobot() {
     robotState.enabled = false;
+    robotState.velIntegral = 0.0f;
+    robotState.targetPitchDeg = 0.0f;
     robotState.targetLinear = 0.0f;
     robotState.targetAngular = 0.0f;
     wasEnabled = false;
@@ -127,6 +129,9 @@ void Receive() {
                     static_cast<float>(Feedback.speedL_meas);
                 robotState.rightWheelSpeed =
                     static_cast<float>(Feedback.speedR_meas);
+                robotState.wheelVelocity = 0.5f * (
+                    robotState.leftWheelSpeed +
+                    WHEEL_RIGHT_SIGN * robotState.rightWheelSpeed);
                 robotState.lastMotorFeedbackMs = millis();
             }
 
@@ -155,6 +160,36 @@ void stopRobot(const char* reason) {
 
     DebugSerial.print("FAULT ");
     DebugSerial.println(reason);
+}
+
+// Outer loop: wheel RPM -> target pitch. Returns the angle-only target when
+// the loop is off, and holds its last value while wheel feedback is stale so
+// balancing never depends on the hoverboard talking back.
+float velocityLoop() {
+    const bool active = robotState.velKp > 0.0f || robotState.velKi > 0.0f;
+    if (!active) {
+        robotState.velIntegral = 0.0f;
+        return robotState.targetLinear * MAX_LEAN_DEG;
+    }
+
+    const bool fresh = robotState.lastMotorFeedbackMs != 0 &&
+        millis() - robotState.lastMotorFeedbackMs <= WHEEL_FEEDBACK_STALE_MS;
+    if (!fresh) {
+        return robotState.targetPitchDeg;
+    }
+
+    const float vTarget = robotState.targetLinear * MAX_WHEEL_RPM;
+    const float vErr = vTarget - robotState.wheelVelocity;
+
+    robotState.velIntegral += vErr * CONTROL_DT_SECONDS;
+    if (robotState.velKi > 0.0f) {
+        const float lim = MAX_VEL_LEAN_DEG / robotState.velKi;
+        robotState.velIntegral = constrain(robotState.velIntegral, -lim, lim);
+    }
+
+    const float lean = robotState.velSign *
+        (robotState.velKp * vErr + robotState.velKi * robotState.velIntegral);
+    return constrain(lean, -MAX_VEL_LEAN_DEG, MAX_VEL_LEAN_DEG);
 }
 
 void startWifiControl() {
@@ -293,8 +328,10 @@ void runControlLoop() {
         robotState.balanceKd
     );
 
+    robotState.targetPitchDeg = velocityLoop();
+
     const BalanceOutput output = balanceController.update(
-        robotState.targetLinear,
+        robotState.targetPitchDeg,
         robotState.targetAngular,
         robotState.pitchDeg,
         robotState.pitchRateDegPerSec,
@@ -322,7 +359,7 @@ void runControlLoop() {
             "p=%.4f i=%.4f d=%.4f out=%.3f cmd=%d accel=%.3f ka=%.3f acorr=%.3f\n",
             robotState.pitchDeg,
             robotState.pitchTrimDeg,
-            robotState.targetLinear * MAX_LEAN_DEG,
+            robotState.targetPitchDeg,
             robotState.balanceKp, robotState.balanceKi, robotState.balanceKd,
             balanceController.lastPTerm(), balanceController.lastITerm(),
             balanceController.lastDTerm(), correctedSpeed, speed,
@@ -367,6 +404,9 @@ void setup() {
     robotState.balanceKi = BALANCE_KI;
     robotState.balanceKd = BALANCE_KD;
     robotState.accelGain = ACCEL_GAIN;
+    robotState.velKp = VEL_KP;
+    robotState.velKi = VEL_KI;
+    robotState.velSign = VEL_SIGN;
     robotState.pitchTrimDeg = loadPitchOffset(PITCH_TRIM_DEG);
 
     robotState.lastCommandMs = millis();
