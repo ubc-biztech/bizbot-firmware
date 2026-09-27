@@ -1,0 +1,12 @@
+{
+  "name": "bizbot-tuner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host"
+  },
+  "devDependencies": {
+    "vite": "^6.3.5",
+    "ws": "^8.18.2"
+  }
+}

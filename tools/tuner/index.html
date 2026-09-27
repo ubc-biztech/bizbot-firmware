@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BizBot Tuner</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>BizBot tuner</h1>
+      <div class="pills">
+        <span id="pill-bridge" class="pill">bridge</span>
+        <span id="pill-robot" class="pill">robot</span>
+      </div>
+      <button id="switch" class="switch off" aria-pressed="false">
+        <span class="knob"></span>
+        <span class="label">BALANCING OFF</span>
+      </button>
+      <div class="actions">
+        <button id="btn-zero">Zero IMU</button>
+        <button id="btn-state">Get state</button>
+        <span class="hint">Esc = off</span>
+      </div>
+    </header>
+
+    <div id="fault" class="fault" hidden></div>
+
+    <main>
+      <section class="card">
+        <h2>Pitch loop <small>SET_PID</small></h2>
+        <div class="gains" id="pid-gains"></div>
+        <p class="hint">Every change sends all three (SET_PID). Gains reset on reboot; note the ones that work.</p>
+      </section>
+
+      <section class="card">
+        <h2>Trim <small>SET_TRIM / ZERO_IMU</small></h2>
+        <div class="gains" id="trim-gains"></div>
+        <p class="hint">Zero IMU makes the current angle the balance point. Saved to flash.</p>
+      </section>
+
+      <section class="card">
+        <h2>Presets <small>saved in this browser</small></h2>
+        <div class="presets" id="presets"></div>
+        <div class="ctl">
+          <input type="text" id="preset-name" placeholder="name, e.g. kp08-kd002" />
+          <button id="btn-save-preset">Save current</button>
+        </div>
+        <p class="hint">Recall sends the pitch gains (not trim). Compare two gain sets on the trace.</p>
+      </section>
+
+      <section class="card readouts">
+        <h2>Live</h2>
+        <div class="grid" id="readouts"></div>
+      </section>
+
+      <section class="card wide">
+        <h2>Pitch trace <small>last 15 s</small> <button id="btn-csv" class="mini">Export CSV</button></h2>
+        <div class="legend">
+          <span><i class="sw s1"></i>pitch</span>
+          <span><i class="sw s2"></i>target</span>
+          <span id="hover-readout"></span>
+        </div>
+        <canvas id="scope" height="220"></canvas>
+      </section>
+
+      <section class="card wide">
+        <h2>Log <label class="toggle"><input type="checkbox" id="show-telemetry" /> show telemetry lines</label></h2>
+        <pre id="log"></pre>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
