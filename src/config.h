@@ -87,7 +87,7 @@ constexpr float PITCH_TRIM_DEG = 2.34f;
 // UART-RVC gives no gyro, so pitch rate is derived by differentiating pitch and
 // low-pass filtering. Alpha in (0,1]: higher = more responsive/noisier, lower =
 // smoother/laggier. Rate inherits IMU_PITCH_SIGN via pitchDeg, so no rate sign.
-constexpr float IMU_RATE_LPF_ALPHA = 0.3f;
+constexpr float IMU_RATE_LPF_ALPHA = 0.15f;
 
 // Side-mounted RVC module: sensor Y is fore/aft, gravity is near +X at rest.
 // Verify stationary tilted readings and forward sign after remounting.

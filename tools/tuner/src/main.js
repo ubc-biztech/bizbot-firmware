@@ -4,9 +4,15 @@
 const $ = (id) => document.getElementById(id);
 
 // --- state -----------------------------------------------------------------
-const gains = { kp: 0.04, ki: 0, kd: 0.001, trim: 0 };
+// Gains live in this browser (localStorage) and are pushed TO the robot
+// whenever it (re)connects. The robot's own values are never read back.
+const GAINS_KEY = "bizbot-gains";
+const gains = { kp: 0.04, ki: 0, kd: 0.001, trim: 0, vkp: 0, vki: 0 };
+try { Object.assign(gains, JSON.parse(localStorage.getItem(GAINS_KEY)) || {}); } catch {}
+function persistGains() { try { localStorage.setItem(GAINS_KEY, JSON.stringify(gains)); } catch {} }
 const live = {}; // last key=value telemetry
-let haveGains = false;
+let haveGains = true;
+let pushedToRobot = false;
 let lastSentAt = 0;
 const SCOPE_SECONDS = 15;
 const samples = []; // {t, pitch, target}
@@ -36,6 +42,7 @@ function send(cmd) {
 let lastRobotLineAt = 0;
 function handle(msg) {
   if (msg.type === "status") {
+    if (!msg.connected) pushedToRobot = false; // push again on the next connect
     robotStatus = msg;
     renderRobotPill();
     return;
@@ -54,8 +61,6 @@ function handle(msg) {
   const isTelemetry = line.startsWith("PID ") || line.startsWith("STATE ");
   if (isTelemetry) {
     parseKv(line);
-    if (line.startsWith("STATE ")) applyStateGains();
-    pushSample(msg.t);
     renderReadouts();
     if ($("show-telemetry").checked) logLine("< " + line);
     return;
@@ -73,7 +78,7 @@ function parseKv(line) {
     const i = tok.indexOf("=");
     if (i > 0) live[tok.slice(0, i)] = Number(tok.slice(i + 1));
   }
-  if ("enabled" in live) setEnabled(!!live.enabled);
+  if (line.startsWith("STATE ") && "enabled" in live) setEnabled(!!live.enabled);
 }
 
 // --- balancing switch --------------------------------------------------------
@@ -97,9 +102,9 @@ function setUnknown() {
   sw.querySelector(".label").textContent = "NO ROBOT";
 }
 sw.onclick = () => {
-  if (enabledKnown === null) return send("GET_STATE");
+  // Same as keyboard_controls.py: just send ENABLE, don't wait for STATE.
   sw.classList.add("pending");
-  send(enabledKnown ? "DISABLE" : "ENABLE");
+  send(enabledKnown === true ? "DISABLE" : "ENABLE");
 };
 function renderRobotPill() {
   const el = $("pill-robot");
@@ -111,19 +116,15 @@ function renderRobotPill() {
     : responsive
       ? `robot ${robotStatus.host}`
       : "robot: no response";
-  if (!responsive) setUnknown();
+  if (!robotStatus.connected) setUnknown();
 }
 setInterval(renderRobotPill, 500);
 
-// The robot's gains are the source of truth, but don't fight the user
-// while they are clicking: only refresh inputs when nothing was sent recently.
-function applyStateGains() {
-  if (Date.now() - lastSentAt < 1500 && haveGains) return;
-  for (const k of ["kp", "ki", "kd", "trim"]) {
-    if (k in live) gains[k] = live[k];
-  }
-  haveGains = true;
-  renderGains();
+// First telemetry after a (re)connect: overwrite the robot with local gains.
+function pushGainsToRobot() {
+  pushedToRobot = true;
+  sendTrim();
+  logLine("! pushed local gains to robot");
 }
 
 // --- gains UI ---------------------------------------------------------------
@@ -178,6 +179,7 @@ function setGain(row, value) {
   if (!Number.isFinite(value)) return renderGains();
   value = Math.min(row.max, Math.max(row.min, value));
   gains[row.key] = Number(value.toFixed(5));
+  persistGains();
   renderGains();
   row.send();
 }
@@ -191,6 +193,9 @@ const fmt = (v) => (Number.isFinite(v) ? Number(v.toFixed(5)).toString() : "");
 function sendPid() {
   send(`SET_PID ${fmt(gains.kp)} ${fmt(gains.ki)} ${fmt(gains.kd)}`);
 }
+function sendVel() {
+  send(`SET_VEL ${fmt(gains.vkp)} ${fmt(gains.vki)}`);
+}
 function sendTrim() {
   send(`SET_TRIM ${fmt(gains.trim)}`);
 }
@@ -198,10 +203,7 @@ function sendTrim() {
 // --- readouts ----------------------------------------------------------------
 const READOUTS = [
   ["pitch", "pitch °"],
-  ["target", "target °"],
   ["pitch_rate", "rate °/s"],
-  ["out", "motor out"],
-  ["cmd", "hover cmd"],
   ["trim", "trim °"],
   ["wheel_l", "wheel L"],
   ["wheel_r", "wheel R"],
@@ -221,105 +223,6 @@ function renderReadouts() {
     const v = live[k];
     $("ro-" + k).textContent = Number.isFinite(v) ? Number(v.toFixed(3)).toString() : "–";
   }
-}
-
-// --- scope -------------------------------------------------------------------
-function pushSample(t) {
-  if (!Number.isFinite(live.pitch)) return;
-  samples.push({ t, pitch: live.pitch, target: Number.isFinite(live.target) ? live.target : 0 });
-  const cutoff = t - SCOPE_SECONDS * 1000;
-  while (samples.length && samples[0].t < cutoff) samples.shift();
-}
-
-const canvas = $("scope");
-const ctx = canvas.getContext("2d");
-let hoverX = null;
-canvas.onmousemove = (e) => (hoverX = e.offsetX);
-canvas.onmouseleave = () => (hoverX = null);
-
-function drawScope() {
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-  }
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-
-  const now = Date.now();
-  const t0 = now - SCOPE_SECONDS * 1000;
-  const pad = { l: 36, r: 8, t: 8, b: 18 };
-  const pw = w - pad.l - pad.r;
-  const ph = h - pad.t - pad.b;
-
-  // Symmetric range around zero so the balance point reads as the centre line.
-  let range = 2;
-  for (const s of samples) range = Math.max(range, Math.abs(s.pitch), Math.abs(s.target));
-  range = Math.ceil(range * 1.1);
-  const x = (t) => pad.l + ((t - t0) / (SCOPE_SECONDS * 1000)) * pw;
-  const y = (v) => pad.t + ph / 2 - (v / range) * (ph / 2);
-
-  // grid: centre line plus range ticks, kept recessive
-  ctx.strokeStyle = "#3a3a38";
-  ctx.lineWidth = 1;
-  ctx.fillStyle = "#8a8a84";
-  ctx.font = "11px system-ui";
-  ctx.textAlign = "right";
-  for (const v of [-range, -range / 2, 0, range / 2, range]) {
-    ctx.beginPath();
-    ctx.moveTo(pad.l, y(v));
-    ctx.lineTo(w - pad.r, y(v));
-    ctx.stroke();
-    ctx.fillText(v.toFixed(0) + "°", pad.l - 6, y(v) + 4);
-  }
-  ctx.textAlign = "center";
-  for (let s = 0; s <= SCOPE_SECONDS; s += 5) {
-    ctx.fillText(`-${SCOPE_SECONDS - s}s`, x(t0 + s * 1000), h - 4);
-  }
-
-  const drawSeries = (key, color) => {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    let first = true;
-    for (const s of samples) {
-      const px = x(s.t);
-      const py = y(s[key]);
-      if (first) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-      first = false;
-    }
-    ctx.stroke();
-  };
-  drawSeries("target", "#d95926");
-  drawSeries("pitch", "#3987e5");
-
-  // hover crosshair + readout
-  const readout = $("hover-readout");
-  if (hoverX !== null && samples.length) {
-    const tHover = t0 + ((hoverX - pad.l) / pw) * SCOPE_SECONDS * 1000;
-    let best = samples[0];
-    for (const s of samples) if (Math.abs(s.t - tHover) < Math.abs(best.t - tHover)) best = s;
-    ctx.strokeStyle = "#c3c2b7";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x(best.t), pad.t);
-    ctx.lineTo(x(best.t), pad.t + ph);
-    ctx.stroke();
-    for (const [k, c] of [["pitch", "#3987e5"], ["target", "#d95926"]]) {
-      ctx.fillStyle = c;
-      ctx.beginPath();
-      ctx.arc(x(best.t), y(best[k]), 4, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    readout.textContent = `pitch ${best.pitch.toFixed(2)}°  target ${best.target.toFixed(2)}°  (${((best.t - now) / 1000).toFixed(1)} s)`;
-  } else {
-    readout.textContent = "";
-  }
-  requestAnimationFrame(drawScope);
 }
 
 // --- log / faults ------------------------------------------------------------
@@ -369,6 +272,7 @@ function renderPresets() {
     el.firstChild.textContent = name;
     el.firstChild.onclick = () => {
       Object.assign(gains, { kp: g.kp, ki: g.ki, kd: g.kd });
+      persistGains();
       renderGains();
       sendPid();
     };
@@ -387,16 +291,6 @@ $("btn-save-preset").onclick = () => {
 };
 renderPresets();
 
-// --- CSV export of the visible trace -----------------------------------------
-$("btn-csv").onclick = () => {
-  const rows = ["t_ms,pitch_deg,target_deg", ...samples.map((s) => `${s.t},${s.pitch},${s.target}`)];
-  const blob = new Blob([rows.join("\n")], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `trace-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-};
 
 $("btn-state").onclick = () => send("GET_STATE");
 window.addEventListener("keydown", (e) => {
@@ -406,4 +300,3 @@ window.addEventListener("keydown", (e) => {
 buildGains();
 renderReadouts();
 connect();
-requestAnimationFrame(drawScope);

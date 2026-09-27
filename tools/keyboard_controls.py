@@ -320,6 +320,22 @@ def handle_tuning_input(transport):
     time.sleep(0.3)  # let the response print and the T key release
 
 
+def stdin_command_loop(transport):
+    """Forward raw command lines from a piped stdin (tools/tuner bridge)."""
+    for raw in sys.stdin:
+        if not running.is_set():
+            return
+        line = raw.strip()
+        if line:
+            try:
+                send(transport, line)
+            except (OSError, serial.SerialException) as error:
+                background_print(f"Connection lost while sending: {error}", file=sys.stderr)
+                running.clear()
+                return
+    running.clear()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Drive BizBot using USB serial or its local Wi-Fi network."
@@ -403,6 +419,9 @@ def main():
         )
         receiver_thread.start()
 
+        if not sys.stdin.isatty():
+            threading.Thread(target=stdin_command_loop, args=(transport,), daemon=True).start()
+
         print(
             "Hold W/A/S/D to move. Release to stop. "
             "I = state. T = tune PID. Q = disable balance and quit."
@@ -412,7 +431,7 @@ def main():
             if is_held("q"):
                 break
 
-            if is_held("t"):
+            if is_held("t") and sys.stdin.isatty():
                 handle_tuning_input(transport)
             elif is_held("i"):
                 set_keepalive("STOP")

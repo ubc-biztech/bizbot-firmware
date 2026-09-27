@@ -30,8 +30,9 @@
       <section class="card">
         <h2>Pitch loop <small>SET_PID</small></h2>
         <div class="gains" id="pid-gains"></div>
-        <p class="hint">Every change sends all three (SET_PID). Gains reset on reboot; note the ones that work.</p>
+        <p class="hint">Values are saved in this browser and sent when you change them.</p>
       </section>
+
 
       <section class="card">
         <h2>Trim <small>SET_TRIM / ZERO_IMU</small></h2>
@@ -46,7 +47,7 @@
           <input type="text" id="preset-name" placeholder="name, e.g. kp08-kd002" />
           <button id="btn-save-preset">Save current</button>
         </div>
-        <p class="hint">Recall sends the pitch gains (not trim). Compare two gain sets on the trace.</p>
+        <p class="hint">Recall sends the pitch gains (not trim).</p>
       </section>
 
       <section class="card readouts">
@@ -54,15 +55,6 @@
         <div class="grid" id="readouts"></div>
       </section>
 
-      <section class="card wide">
-        <h2>Pitch trace <small>last 15 s</small> <button id="btn-csv" class="mini">Export CSV</button></h2>
-        <div class="legend">
-          <span><i class="sw s1"></i>pitch</span>
-          <span><i class="sw s2"></i>target</span>
-          <span id="hover-readout"></span>
-        </div>
-        <canvas id="scope" height="220"></canvas>
-      </section>
 
       <section class="card wide">
         <h2>Log <label class="toggle"><input type="checkbox" id="show-telemetry" /> show telemetry lines</label></h2>

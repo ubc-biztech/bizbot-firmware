@@ -69,7 +69,7 @@ disables the robot and restores USB command input.
    python3 -m pip install -r requirements.txt
    ```
 
-3. Build and flash the ESP32 (see [Flashing](#flashing) below):
+3. Build and upload using the PlatformIO IDE, or its CLI:
 
    ```bash
    pio run --target upload
@@ -106,33 +106,6 @@ output to zero. Do not set `IMU_USE_STUB=0` until the real IMU implementation
 returns correctly oriented pitch and pitch-rate measurements. After installing
 the real IMU, perform the first motor test with the chassis restrained and tune
 the placeholder controller values before putting the wheels on the ground.
-
-## Browser tuner
-
-`tools/tuner` is a Vite page with buttons for the PID gains and trim, a live
-pitch trace, and a log. It talks to the robot over Wi-Fi exactly like the
-keyboard tool (one controller at a time, so close the other first):
-
-```bash
-cd tools/tuner && npm install && npm run dev     # then open http://localhost:5173
-```
-
-## Flashing
-
-PlatformIO Core is installed at `~/.platformio/penv/bin/pio`; add that
-directory to your `PATH` or call it by full path.
-
-1. Plug the ESP32 into USB. Close any serial monitor or `keyboard_controls.py`
-   holding the port.
-2. `pio device list` shows the board as `/dev/cu.usbserial-XXXX` on macOS.
-3. `pio run --target upload` (add `--upload-port /dev/cu.usbserial-XXXX` if it
-   picks the wrong port). Ends with `Hard resetting via RTS pin`.
-4. `pio device monitor` shows the boot log; `Ctrl+C` exits. Exit before
-   flashing again.
-
-Flashing resets the ESP32. Afterwards, power-cycle the hoverboard and rejoin
-the `BizBot-Control` Wi-Fi on the laptop. If the upload hangs at
-`Connecting........`, hold the board's BOOT button until writing starts.
 
 ## Repo structure
 
