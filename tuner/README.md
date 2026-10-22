@@ -8,7 +8,7 @@ did.
 ## Run
 
 ```bash
-cd tools/tuner
+cd tuner
 npm install          # first time only
 npm run dev
 ```

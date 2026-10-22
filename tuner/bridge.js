@@ -7,7 +7,7 @@ import { spawn, execSync } from "node:child_process";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 
-const ROOT = path.resolve(import.meta.dirname, "../..");
+const ROOT = path.resolve(import.meta.dirname, "..");
 const PYTHON = process.env.BIZBOT_PYTHON || path.join(ROOT, ".venv/bin/python");
 const SCRIPT = path.join(ROOT, "tools/keyboard_controls.py");
 

@@ -79,10 +79,10 @@ for your board (CP210x for Silicon Labs, CH340 for WCH) and re-plug.
 Build, upload, and open the monitor in one line (PlatformIO auto-detects the port):
 
 ```bash
-pio run --target upload && pio device monitor
+pio run -d firmware --target upload && pio device monitor -d firmware
 ```
 
-- Baud is already 115200 (`monitor_speed` in `platformio.ini`).
+- Baud is already 115200 (`monitor_speed` in `firmware/platformio.ini`).
 - **Exit the monitor with `Ctrl+C`.**
 - Only one program can hold the port — **close the monitor before re-flashing**,
   or the upload fails with a "port busy" error.
@@ -91,8 +91,8 @@ pio run --target upload && pio device monitor
 To pin the port explicitly:
 
 ```bash
-pio run --target upload --upload-port /dev/cu.usbserial-XXXX
-pio device monitor --port /dev/cu.usbserial-XXXX
+pio run -d firmware --target upload --upload-port /dev/cu.usbserial-XXXX
+pio device monitor -d firmware --port /dev/cu.usbserial-XXXX
 ```
 
 ### Expected boot output
@@ -112,7 +112,7 @@ BizBot firmware ready
 The robot's "pitch" axis depends on how the board is physically mounted, so you
 must confirm which Euler angle and gyro axis correspond to leaning forward.
 
-1. Edit `platformio.ini` and enable the debug dump — set the last line to:
+1. Edit `firmware/platformio.ini` and enable the debug dump — set the last line to:
 
    ```ini
    build_flags = -DIMU_DEBUG_EULER=1
@@ -121,7 +121,7 @@ must confirm which Euler angle and gyro axis correspond to leaning forward.
 2. Re-flash and open the monitor:
 
    ```bash
-   pio run --target upload && pio device monitor
+   pio run -d firmware --target upload && pio device monitor -d firmware
    ```
 
 3. You'll see a stream every ~200 ms:
@@ -148,7 +148,7 @@ must confirm which Euler angle and gyro axis correspond to leaning forward.
    Rule: **leaning forward must produce a positive `pitchDeg` and a positive
    pitch rate.** Flip the corresponding `*_SIGN` to `-1.0f` if it reads negative.
 
-6. **Re-comment the debug flag** in `platformio.ini` (back to `; build_flags = ...`)
+6. **Re-comment the debug flag** in `firmware/platformio.ini` (back to `; build_flags = ...`)
    and re-flash for normal operation.
 
 ### Verify with GET_STATE (optional)
