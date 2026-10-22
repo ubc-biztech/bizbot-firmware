@@ -321,7 +321,7 @@ def handle_tuning_input(transport):
 
 
 def stdin_command_loop(transport):
-    """Forward raw command lines from a piped stdin (tools/tuner bridge)."""
+    """Forward raw command lines from a piped stdin (tuner bridge)."""
     for raw in sys.stdin:
         if not running.is_set():
             return

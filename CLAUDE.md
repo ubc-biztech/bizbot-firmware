@@ -29,5 +29,5 @@
   UART (needs a hoverboard power cycle with the ESP32 up).
 - Joining the robot's Wi-Fi kills this session; ask the user to collect logs
   rather than simulating hardware.
-- `tools/tuner` drives the robot by spawning `tools/keyboard_controls.py`.
+- `tuner/` drives the robot by spawning `tools/keyboard_controls.py`.
   Python must be started with `-u` or its output is block-buffered.

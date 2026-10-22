@@ -10,7 +10,7 @@ did.
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-cd tools/tuner
+cd tuner
 npm install          # first time only
 npm run dev
 ```

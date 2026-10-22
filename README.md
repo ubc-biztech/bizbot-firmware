@@ -72,7 +72,7 @@ disables the robot and restores USB command input.
 3. Build and upload using the PlatformIO IDE, or its CLI:
 
    ```bash
-   pio run --target upload
+   pio run -d firmware --target upload
    ```
 
 4. Open the USB serial monitor at 115200 baud. On a successful boot it prints:
@@ -111,38 +111,44 @@ the placeholder controller values before putting the wheels on the ground.
 
 ```
 bizbot-firmware/
-├── platformio.ini
-├── src/
-│   ├── main.cpp
-│   ├── config.h
-│   │
-│   ├── hal/
-│   │   ├── Imu.h
-│   │   ├── Imu.cpp
-│   │   ├── MotorDriver.h
-│   │   ├── MotorDriver.cpp
-│   │   ├── Encoder.h
-│   │   ├── Encoder.cpp
-│   │   ├── Battery.h
-│   │   └── Battery.cpp
-│   │
-│   ├── control/
-│   │   ├── PID.h
-│   │   ├── PID.cpp
-│   │   ├── BalanceController.h
-│   │   ├── BalanceController.cpp
-│   │   ├── VelocityController.h
-│   │   └── VelocityController.cpp
-│   │
-│   ├── comms/
-│   │   ├── CommandParser.h
-│   │   ├── CommandParser.cpp
-│   │   ├── Telemetry.h
-│   │   └── Telemetry.cpp
-│   │
-│   └── robot/
-│       ├── RobotState.h
-│       └── RobotState.cpp
+├── firmware/
+│   ├── platformio.ini
+│   └── src/
+│       ├── main.cpp
+│       ├── config.h
+│       │
+│       ├── hal/
+│       │   ├── Imu.h
+│       │   ├── Imu.cpp
+│       │   ├── MotorDriver.h
+│       │   ├── MotorDriver.cpp
+│       │   ├── Encoder.h
+│       │   ├── Encoder.cpp
+│       │   ├── Battery.h
+│       │   └── Battery.cpp
+│       │
+│       ├── control/
+│       │   ├── PID.h
+│       │   ├── PID.cpp
+│       │   ├── BalanceController.h
+│       │   ├── BalanceController.cpp
+│       │   ├── VelocityController.h
+│       │   └── VelocityController.cpp
+│       │
+│       ├── comms/
+│       │   ├── CommandParser.h
+│       │   ├── CommandParser.cpp
+│       │   ├── Telemetry.h
+│       │   └── Telemetry.cpp
+│       │
+│       └── robot/
+│           ├── RobotState.h
+│           └── RobotState.cpp
+│
+├── sim/
+│   └── index.html
+│
+├── tuner/
 │
 ├── tools/
 │   └── keyboard_control.py
