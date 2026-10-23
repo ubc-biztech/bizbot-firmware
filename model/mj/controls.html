@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bizbot simulation controls</title>
+<style>
+:root {color-scheme:dark;font:15px system-ui;background:#171b23;color:#e8edf5}
+body {max-width:480px;margin:32px auto;padding:0 20px}
+h1 {font-size:22px;margin-bottom:8px} h2 {font-size:17px;margin-top:0}
+section {background:#242b37;border:1px solid #394353;border-radius:12px;padding:20px;margin:18px 0}
+p {color:#aebbd0;line-height:1.5} .row {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px}
+input[type=range] {width:100%;margin:12px 0;accent-color:#83c7ff}
+input[type=number] {width:80px;background:#171b23;color:inherit;border:1px solid #536176;border-radius:6px;padding:7px;font:inherit}
+button {background:#86c9ff;color:#112134;border:0;padding:12px 18px;border-radius:8px;font:600 15px system-ui;cursor:pointer;flex:1}
+button:disabled {opacity:.4;cursor:default} button.secondary {background:#394353;color:inherit;width:100%}
+button.held {background:#b7e8b7} #drive-pad {outline-offset:6px} #drive-pad button {touch-action:none;user-select:none}
+#status {font-size:13px;color:#aebbd0} #force-status {min-height:24px;font-variant-numeric:tabular-nums}
+</style>
+<h1>Simulation controls</h1>
+<div id="status" role="status">Connecting…</div>
+<section id="drive-pad" tabindex="0" aria-label="Driving controls">
+<h2>Hold to drive · release to stop</h2>
+<p>Hold W/S to drive and A/D to steer while this panel has focus. Combine them for arcs; A/D alone turns in place. Release to brake. Click here after editing a setting.</p>
+<div id="drive-limit"></div>
+<div class="row"><button id="drive-backward" disabled>Hold S · backward</button><button id="drive-forward" disabled>Hold W · forward</button></div>
+<div class="row"><button id="turn-left" disabled>Hold A · turn left</button><button id="turn-right" disabled>Hold D · turn right</button></div>
+<p id="turn-status" role="status"></p>
+<p id="drive-status" role="status">Connecting…</p>
+<div id="drive-speed">Requested 0.00 m/s · estimated 0.00 m/s</div>
+</section>
+<section>
+<h2>Push along X</h2>
+<p>Forward/backward force at the torso. No sideways force.</p>
+<div class="row"><label for="force">Force (N)</label><input id="force" type="number" min="1" max="150" step="1" value="30"></div>
+<input id="force-range" aria-label="Push force" type="range" min="1" max="150" step="1" value="30">
+<div class="row"><label for="duration">Duration (s)</label><input id="duration" type="number" min="0.05" max="2" step="0.05" value="0.25"></div>
+<div class="row"><button id="backward">← Push −X</button><button id="forward">Push +X →</button></div>
+<p id="force-status" role="status">No push</p>
+</section>
+<section>
+<h2>Live robot settings</h2>
+<div id="settings"></div>
+<p>Changes apply immediately. A new robot, including after a fall, loads its own settings.</p>
+</section>
+<button id="new" class="secondary">New random robot</button>
+<script>
+const $ = id => document.getElementById(id);
+const fields = [['speed_limit','Request limit (m/s)',0,10.00,0.01],['acceleration_limit','Acceleration limit (m/s²)',0.01,50.00,0.01],['turn_limit','Turn-rate limit (°/s)',0,720,0.01],['turn_acceleration','Turn acceleration / braking (°/s²)',1,3600,0.01],['turn_command_limit','Steering command cap (%)',0,100,1],['com','COM forward offset (cm)',-15,15,0.1],['tilt','IMU mounting tilt (°)',-20,20,0.1],['lat','IMU latency (ms)',0,250,1]];
+let online = false;
+let driveEnabled = false;
+let driveSequence = Date.now() * 1000;
+const driveKeys = new Set();
+const pending = new Set();
+async function send(data) {
+  try {
+    const response = await fetch('/command', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),signal:AbortSignal.timeout(1000),keepalive:true});
+    if (!response.ok) throw Error('Invalid control value');
+  } catch (error) {
+    $('status').textContent = error.message;
+    if (data.name === 'drive') clearDrive(false);
+  }
+}
+function sendDrive() {
+  const direction = Number(driveKeys.has('KeyW')) - Number(driveKeys.has('KeyS'));
+  const turn = Number(driveKeys.has('KeyA')) - Number(driveKeys.has('KeyD'));
+  send({name:'drive',direction,turn,sequence:++driveSequence});
+  $('drive-forward').classList.toggle('held', driveKeys.has('KeyW'));
+  $('drive-backward').classList.toggle('held', driveKeys.has('KeyS'));
+  $('turn-left').classList.toggle('held', driveKeys.has('KeyA'));
+  $('turn-right').classList.toggle('held', driveKeys.has('KeyD'));
+}
+function clearDrive(notify=true) {
+  const held = driveKeys.size > 0;
+  driveKeys.clear();
+  $('drive-forward').classList.remove('held');
+  $('drive-backward').classList.remove('held');
+  $('turn-left').classList.remove('held');
+  $('turn-right').classList.remove('held');
+  if (held && notify) sendDrive();
+}
+document.addEventListener('keydown', event => {
+  if (!['KeyW','KeyS','KeyA','KeyD'].includes(event.code) || !online || !driveEnabled || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.target.matches('input,textarea,[contenteditable="true"]')) return;
+  event.preventDefault();
+  if (!driveKeys.has(event.code)) { driveKeys.add(event.code); sendDrive(); }
+});
+document.addEventListener('keyup', event => {
+  if (driveKeys.delete(event.code)) { event.preventDefault(); sendDrive(); }
+});
+window.addEventListener('blur', () => clearDrive());
+window.addEventListener('pagehide', () => clearDrive());
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearDrive(); });
+document.addEventListener('focusin', event => { if (event.target.matches('input,textarea')) clearDrive(); });
+for (const [id,key] of [['drive-forward','KeyW'],['drive-backward','KeyS'],['turn-left','KeyA'],['turn-right','KeyD']]) {
+  $(id).addEventListener('pointerdown', event => {
+    if (!online || !driveEnabled || event.button !== 0) return;
+    event.preventDefault();
+    $('drive-pad').focus();
+    $(id).setPointerCapture(event.pointerId);
+    driveKeys.add(key); sendDrive();
+  });
+  for (const event of ['pointerup','pointercancel','lostpointercapture']) {
+    $(id).addEventListener(event, () => { if (driveKeys.delete(key)) sendDrive(); });
+  }
+}
+setInterval(() => { if (driveKeys.size && online && driveEnabled && !document.hidden) sendDrive(); }, 100);
+for (const [name,label,min,max,step] of fields) {
+  const block = document.createElement('div');
+  block.innerHTML = `<div class="row"><label for="${name}">${label}</label><input id="${name}" type="number" min="${min}" max="${max}" step="${step}"></div><input id="${name}-range" aria-label="${label}" type="range" min="${min}" max="${max}" step="${step}">`;
+  $(['speed_limit','acceleration_limit','turn_limit','turn_acceleration','turn_command_limit'].includes(name) ? 'drive-limit' : 'settings').append(block);
+  let timer;
+  const update = (source, target) => {
+    if (!source.checkValidity() || source.value === '') return;
+    target.value = source.value;
+    pending.add(name);
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      await send({name,value:Number(source.value)});
+      setTimeout(() => pending.delete(name), 250);
+    }, 80);
+  };
+  $(name).addEventListener('input', () => update($(name), $(name+'-range')));
+  $(name+'-range').addEventListener('input', () => update($(name+'-range'), $(name)));
+}
+$('force').oninput = () => { if ($('force').checkValidity()) $('force-range').value=$('force').value; };
+$('force-range').oninput = () => $('force').value=$('force-range').value;
+function push(sign) {
+  if (!$('force').reportValidity() || !$('duration').reportValidity()) return;
+  send({name:'push',force:sign*Number($('force').value),duration:Number($('duration').value)});
+}
+$('forward').onclick = () => push(1);
+$('backward').onclick = () => push(-1);
+$('new').onclick = () => { clearDrive(); send({name:'new'}); };
+async function refresh() {
+  try {
+    const response = await fetch('/state', {signal:AbortSignal.timeout(1500)});
+    if (!response.ok) throw Error();
+    const state = await response.json();
+    online = true;
+    driveEnabled = Boolean(state.drive);
+    $('turn-status').textContent = state.turn ? `Turn: requested ${(state.turn.reference*180/Math.PI).toFixed(1)}°/s · estimated ${(state.turn.rate*180/Math.PI).toFixed(1)}°/s` : '';
+    $('status').textContent = 'Connected to MuJoCo';
+    for (const [name] of fields) {
+      const value = name === 'speed_limit' ? state.drive?.limit : name === 'acceleration_limit' ? state.drive?.acceleration_limit : name === 'turn_limit' ? state.turn?.limit_deg : name === 'turn_acceleration' ? state.turn?.acceleration_deg : name === 'turn_command_limit' ? state.turn?.command_percent : state[name];
+      if (value === undefined || pending.has(name) || [$(name),$(name+'-range')].includes(document.activeElement)) continue;
+      $(name).value = Number(value.toFixed(2));
+      $(name+'-range').value = value;
+    }
+    $('force-status').textContent = state.push ? `Applying ${state.push > 0 ? '+' : ''}${state.push.toFixed(0)} N along X` : 'No push';
+    $('drive-status').textContent = state.drive ? `${state.drive.status} · request limit ${state.drive.limit.toFixed(2)} m/s` : 'Driving requires an RL policy';
+    if (state.drive) $('drive-speed').textContent = `Requested ${state.drive.reference.toFixed(2)} m/s · estimated ${state.drive.speed.toFixed(2)} m/s`;
+  } catch {
+    online = false;
+    clearDrive();
+    $('status').textContent = 'Simulation disconnected';
+  }
+  document.querySelectorAll('button,input').forEach(el => el.disabled=!online);
+  $('drive-forward').disabled = $('drive-backward').disabled = !online || !driveEnabled;
+  $('turn-left').disabled = $('turn-right').disabled = !online || !driveEnabled;
+  $('speed_limit').disabled = $('speed_limit-range').disabled = !online || !driveEnabled;
+  $('acceleration_limit').disabled = $('acceleration_limit-range').disabled = !online || !driveEnabled;
+  $('turn_limit').disabled = $('turn_limit-range').disabled = !online || !driveEnabled;
+  $('turn_acceleration').disabled = $('turn_acceleration-range').disabled = !online || !driveEnabled;
+  $('turn_command_limit').disabled = $('turn_command_limit-range').disabled = !online || !driveEnabled;
+  setTimeout(refresh, 250);
+}
+refresh();
+</script>
+</html>
