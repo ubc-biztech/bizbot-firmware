@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BizBot Live Sim</title>
+<style>
+  :root { --bg:#1d1d1b; --card:#262624; --line:#3a3a38; --text:#e8e6dc; --muted:#8a8a84; --blue:#3987e5; --orange:#d95926; --green:#5aa469; --red:#d64545; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:13px system-ui, sans-serif; }
+  header { padding:10px 16px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0 8px 0 0; }
+  select, button, input[type=number] { background:#34342f; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font:inherit; }
+  button { cursor:pointer; min-width:70px; }
+  button:hover { background:#3e3e38; }
+  button.primary { background:var(--blue); border-color:var(--blue); }
+  button.primary:hover { background:#4a94ea; }
+  #scrub { flex:1; min-width:160px; }
+  #clock { color:var(--muted); font-variant-numeric:tabular-nums; min-width:110px; }
+  #status { color:var(--red); }
+  .wrap { display:flex; gap:16px; padding:16px; align-items:flex-start; }
+  .left { flex:1; min-width:0; }
+  canvas { width:100%; display:block; background:var(--card); border-radius:8px; }
+  #world { height:380px; }
+  .plot { height:96px; margin-top:8px; cursor:crosshair; }
+  .right { width:360px; flex:none; max-height:calc(100vh - 70px); overflow:auto; }
+  fieldset { border:1px solid var(--line); border-radius:8px; margin:0 0 12px; padding:8px 10px; }
+  legend { color:var(--muted); padding:0 4px; }
+  #note { margin:0; line-height:1.45; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  td { padding:2px 4px; vertical-align:top; }
+  td:first-child { color:var(--muted); }
+  tr.group td { color:var(--text); font-weight:600; padding-top:8px; }
+  .key { display:flex; gap:8px; align-items:center; margin:3px 0; }
+  .sw { width:22px; height:4px; border-radius:2px; flex:none; }
+  .hint { color:var(--muted); font-size:12px; margin:6px 0 0; }
+  dialog { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:16px 18px; width:min(460px, calc(100vw - 32px)); max-height:calc(100vh - 32px); }
+  dialog::backdrop { background:rgba(0,0,0,0.35); }
+  dialog h2 { font-size:14px; margin:0 0 12px; }
+  .form { display:grid; grid-template-columns:1fr 150px; gap:6px 10px; align-items:center; }
+  .form label { color:var(--muted); }
+  .form .group { grid-column:1 / -1; font-weight:600; margin-top:8px; }
+  .form input, .form select { width:100%; }
+  .form :disabled { opacity:0.4; }
+  .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+  details summary { cursor:pointer; color:var(--muted); margin-top:14px; }
+  @media (max-width: 960px) { .wrap { flex-direction:column; } .right { width:100%; max-height:none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>BizBot sim</h1>
+  <select id="algo" title="Algorithm"></select>
+  <button id="restart">Restart</button>
+  <button id="play">Pause</button>
+  <select id="speed" title="Playback speed">
+    <option value="0.1">0.1x</option><option value="0.25" selected>0.25x</option>
+    <option value="0.5">0.5x</option><option value="1">1x</option>
+  </select>
+  <button id="push">Push</button>
+  <button id="pushSettings">Push settings</button>
+  <button id="conditions">Conditions</button>
+  <input type="range" id="scrub" min="0" max="1000" value="0" />
+  <span id="clock"></span>
+  <span id="status"></span>
+</header>
+<div class="wrap">
+  <div class="left">
+    <canvas id="world"></canvas>
+    <div id="plots"></div>
+  </div>
+  <div class="right">
+    <fieldset><legend>Algorithm</legend><p id="note"></p></fieldset>
+    <fieldset><legend>Now</legend><table id="now"></table></fieldset>
+    <fieldset><legend>Drawing</legend>
+      <div class="key"><span class="sw" style="background:#bdbab0"></span>body at its true pitch</div>
+      <div class="key"><span class="sw" style="background:var(--orange)"></span>pitch the ESP32 measured (delay, noise, mounting error)</div>
+      <div class="key"><span class="sw" style="background:var(--blue)"></span>centre of mass, sized by mass; dashed plumb line below it</div>
+      <div class="key"><span class="sw" style="background:var(--orange);width:8px;height:8px"></span>IMU</div>
+      <div class="key"><span class="sw" style="background:var(--red)"></span>contact point turns red while slipping; arrow = push</div>
+      <p class="hint">Ground ticks every 10 cm, labels every metre. The floor is drawn tilted by the slope; screen-down is gravity. Space plays or pauses, arrow keys step 10 ms, click a plot to jump.</p>
+    </fieldset>
+  </div>
+</div>
+
+<dialog id="pushDialog">
+  <h2>Push</h2>
+  <div class="form">
+    <label for="pDir">direction</label>
+    <select id="pDir"><option value="1">forward</option><option value="-1">backward</option></select>
+    <label for="pForce">force (N)</label><input type="number" id="pForce" value="60" min="0" max="500" step="5" />
+    <label for="pDur">duration (s)</label><input type="number" id="pDur" value="0.2" min="0.01" max="2" step="0.05" />
+    <label for="pHeight">height above the axle (m)</label><input type="number" id="pHeight" value="0.45" min="0" max="1.5" step="0.05" />
+  </div>
+  <div class="actions"><button id="pushClose">Done</button><button id="pushNow" class="primary">Push now</button></div>
+</dialog>
+
+<dialog id="condDialog">
+  <h2>Conditions</h2>
+  <div class="form">
+    <label for="cRandom">robot</label>
+    <select id="cRandom">
+      <option value="0">as set below</option><option value="0.25">random, 25% of training ranges</option>
+      <option value="0.5">random, 50% of training ranges</option><option value="1">random, full training ranges</option>
+    </select>
+    <div class="group">Floor</div>
+    <label for="c_mu">friction (mu)</label><input type="number" id="c_mu" data-key="mu" min="0.05" max="1.5" step="0.05" />
+    <label for="c_slope">slope, + is uphill ahead (deg)</label><input type="number" id="c_slope" data-key="slope_deg" min="-15" max="15" step="1" />
+    <div class="group">Weight</div>
+    <label for="c_mass">body mass (kg)</label><input type="number" id="c_mass" data-key="mass" min="5" max="80" step="1" />
+    <label for="c_comh">COM height above the axle (m)</label><input type="number" id="c_comh" data-key="com_height" min="0.05" max="1.2" step="0.05" />
+    <label for="c_comf">COM forward of the body axis (cm)</label><input type="number" id="c_comf" data-key="com_forward_cm" min="-15" max="15" step="1" />
+    <div class="group">IMU</div>
+    <label for="c_lat">latency (ms)</label><input type="number" id="c_lat" data-key="imu_latency_ms" min="0" max="200" step="5" />
+    <label for="c_noise">pitch noise (deg)</label><input type="number" id="c_noise" data-key="imu_noise_deg" min="0" max="2" step="0.01" />
+    <div class="group">Hoverboard</div>
+    <label for="c_mode">control mode</label>
+    <select id="c_mode" data-key="mode"><option value="voltage">voltage</option><option value="speed">speed</option><option value="torque">torque</option></select>
+    <label for="c_filter">command filter</label>
+    <select id="c_filter" data-key="filter"><option value="stock">stock</option><option value="off">off</option></select>
+    <label for="c_batt">battery (V)</label><input type="number" id="c_batt" data-key="battery_v" min="30" max="42.5" step="0.5" />
+    <div class="group">Start</div>
+    <label for="c_tilt">tilt at start (deg)</label><input type="number" id="c_tilt" data-key="start_tilt_deg" data-always="1" min="-30" max="30" step="1" />
+  </div>
+  <p class="hint">Random robots draw every parameter from the training ranges, including its random pushes and sudden slope, floor and payload changes.</p>
+  <div class="actions"><button id="condNominal">Nominal</button><button id="condCancel">Cancel</button><button id="condApply" class="primary">Restart with these</button></div>
+  <details><summary>All parameters of the current robot</summary><table id="params"></table></details>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const COL = { blue:"#3987e5", orange:"#d95926", green:"#5aa469", red:"#d64545", grey:"#8a8a84",
+              text:"#e8e6dc", line:"#3a3a38", card:"#262624", body:"#bdbab0", ground:"#30302c" };
+const RAD = Math.PI / 180, DT = 0.01, WINDOW = 10, KEEP_S = 300;
+const PLOTS = [
+  { title: "Pitch (deg)", series: [["pitch", "true", COL.blue], ["pitch_meas", "ESP32 measured", COL.orange]] },
+  { title: "Hoverboard command", series: [["cmd_sent", "sent by ESP32", COL.blue], ["cmd_motor", "at motor (delayed, filtered)", COL.orange]] },
+  { title: "Wheel speed vs body (rpm)", series: [["rpm_true", "true", COL.blue], ["rpm_left", "measured L", COL.orange], ["rpm_right", "measured R", COL.green]] },
+  { title: "Ground speed and slip (m/s)", series: [["speed", "ground speed", COL.blue], ["slip", "slip", COL.red]] },
+  { title: "Push (N)", series: [["push", "push force", COL.grey]] },
+  { title: "Battery (V)", series: [["battery_v", "voltage", COL.green]] },
+];
+const M = { left: 48, right: 10, top: 18, bottom: 16 };
+const FIELDS = [...document.querySelectorAll("#condDialog [data-key]")];
+
+let algos = [], defaults = null, algo = "pid", cond = null, info = null;
+let S = {}, t = 0, head = 0, fellAt = null, playing = true, speed = 0.25, last = null, scale = 300, bodyLen = 0.6;
+let gen = 0, inflight = false, stepAfter = false, offline = false;
+const plotCanvases = [];
+
+// --- server --------------------------------------------------------------------
+let queue = Promise.resolve();
+function enqueue(fn) { const p = queue.then(fn); queue = p.catch(() => {}); return p; }
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`);
+  return res.json();
+}
+
+function lost(err) {
+  console.error(err);
+  offline = true; playing = false; setPlay();
+  $("status").textContent = "sim not responding: restart sim/live.py and reload";
+}
+
+function requestStep(seconds) {
+  if (inflight || offline || fellAt !== null) return;
+  inflight = true;
+  const g = gen;
+  enqueue(() => api("/api/step", { seconds })).then((res) => {
+    if (g !== gen) return;
+    append(res.frames);
+    if (res.fell) fellAt = head;
+    if (stepAfter) { t = head; stepAfter = false; }
+  }).catch(lost).finally(() => { if (g === gen) inflight = false; });
+}
+
+function append(f) {
+  if (!f.t.length) return;
+  for (const k in f) (S[k] ||= []).push(...f[k]);
+  head = S.t[S.t.length - 1];
+  bodyLen = Math.max(bodyLen, ...f.com_height.map((h) => h * 1.3));
+  const excess = S.t.length - KEEP_S / DT;
+  if (excess > 1000) for (const k in S) S[k].splice(0, excess);
+}
+
+async function restart() {
+  gen++;
+  inflight = false; stepAfter = false;
+  const g = gen;
+  try { info = await enqueue(() => api("/api/reset", { algo, conditions: cond })); } catch (e) { lost(e); return; }
+  if (g !== gen) return;
+  S = {}; t = 0; head = 0; fellAt = null; playing = true; setPlay();
+  bodyLen = info.com_height * 1.3;
+  const tallest = Math.max(info.com_height, info.imu_height) * 1.3 + info.wheel_radius;
+  scale = Math.min(380, 290 / (tallest + 0.1));
+  $("note").textContent = info.note;
+  renderParams();
+  requestStep(DT);
+}
+
+// --- setup ---------------------------------------------------------------------
+function fitCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+function ready() { return S.t && S.t.length > 0; }
+
+function val(key, time) {
+  const a = S[key], n = a.length;
+  const x = Math.min(Math.max((time - S.t[0]) / DT, 0), n - 1);
+  const i = Math.floor(x), j = Math.min(i + 1, n - 1), f = x - i;
+  return a[i] + (a[j] - a[i]) * f;
+}
+
+function view() {
+  const end = Math.max(S.t[0] + WINDOW, Math.min(head, t + WINDOW / 2));
+  return [end - WINDOW, end];
+}
+
+$("algo").onchange = () => { algo = $("algo").value; restart(); };
+$("restart").onclick = () => restart();
+$("speed").onchange = () => { speed = +$("speed").value; };
+$("play").onclick = () => togglePlay();
+$("scrub").oninput = () => { if (ready()) t = S.t[0] + (+$("scrub").value / 1000) * (head - S.t[0]); };
+$("push").onclick = () => doPush();
+$("pushSettings").onclick = () => $("pushDialog").showModal();
+$("pushClose").onclick = () => $("pushDialog").close();
+$("pushNow").onclick = () => { $("pushDialog").close(); doPush(); };
+$("conditions").onclick = () => { fillConditions(cond); $("condDialog").showModal(); };
+$("condCancel").onclick = () => $("condDialog").close();
+$("condNominal").onclick = () => fillConditions(defaults);
+$("condApply").onclick = () => { cond = readConditions(); $("condDialog").close(); restart(); };
+$("cRandom").onchange = () => lockFields();
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT" || document.querySelector("dialog[open]")) return;
+  if (!ready()) return;
+  if (e.key === " ") { togglePlay(); e.preventDefault(); }
+  if (e.key === "ArrowRight") {
+    playing = false; setPlay();
+    if (t + DT <= head + 1e-9) t += DT;
+    else if (fellAt === null) { stepAfter = true; requestStep(DT); }
+    e.preventDefault();
+  }
+  if (e.key === "ArrowLeft") { playing = false; setPlay(); t = Math.max(S.t[0], t - DT); e.preventDefault(); }
+});
+
+for (const def of PLOTS) {
+  const cv = document.createElement("canvas");
+  cv.className = "plot";
+  const seek = (e) => {
+    if (!ready()) return;
+    const w = cv.clientWidth - M.left - M.right, [w0] = view();
+    t = Math.min(head, Math.max(S.t[0], w0 + ((e.offsetX - M.left) / w) * WINDOW));
+  };
+  cv.addEventListener("mousedown", (e) => { seek(e); cv.onmousemove = (ev) => { if (ev.buttons) seek(ev); }; });
+  $("plots").appendChild(cv);
+  plotCanvases.push(cv);
+}
+
+function togglePlay() {
+  if (!playing && fellAt !== null && t >= head) t = S.t[0];
+  playing = !playing; setPlay();
+}
+function setPlay() { $("play").textContent = playing ? "Pause" : "Play"; }
+
+function doPush() {
+  if (!ready() || fellAt !== null || offline) return;
+  const force = +$("pDir").value * (+$("pForce").value || 0);
+  const duration = +$("pDur").value || 0.2, height = +$("pHeight").value || 0;
+  enqueue(() => api("/api/push", { force, duration, height })).catch(lost);
+  t = head; playing = true; setPlay();
+}
+
+function fillConditions(c) {
+  $("cRandom").value = String(c.random);
+  for (const el of FIELDS) el.value = String(c[el.dataset.key]);
+  lockFields();
+}
+function readConditions() {
+  const c = { random: +$("cRandom").value };
+  for (const el of FIELDS) {
+    const k = el.dataset.key;
+    c[k] = el.tagName === "SELECT" ? el.value : (el.value === "" || isNaN(+el.value) ? defaults[k] : +el.value);
+  }
+  return c;
+}
+function lockFields() {
+  const random = +$("cRandom").value > 0;
+  for (const el of FIELDS) el.disabled = random && !el.dataset.always;
+}
+
+function renderParams() {
+  let html = "", group = "";
+  for (const [g, label, value] of info.params) {
+    if (g !== group) { html += `<tr class="group"><td colspan="2">${g}</td></tr>`; group = g; }
+    html += `<tr><td>${label}</td><td>${value}</td></tr>`;
+  }
+  $("params").innerHTML = html;
+}
+
+function title() {
+  const a = algos.find((x) => x.key === algo);
+  const c = cond.random > 0 ? `random robot, ${cond.random * 100}% of training ranges`
+    : FIELDS.every((el) => String(cond[el.dataset.key]) === String(defaults[el.dataset.key])) ? "nominal robot" : "conditions as set";
+  return `${a ? a.label : algo}  ·  ${c}`;
+}
+
+// --- plots ---------------------------------------------------------------------
+function niceStep(range, target) {
+  const raw = range / target, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 5, 10]) if (m * mag >= raw) return m * mag;
+  return 10 * mag;
+}
+
+function drawPlots() {
+  const [w0, w1] = view();
+  const i0 = Math.max(0, Math.floor((w0 - S.t[0]) / DT)), i1 = Math.min(S.t.length - 1, Math.ceil((w1 - S.t[0]) / DT));
+  PLOTS.forEach((def, p) => {
+    const { ctx, w, h } = fitCanvas(plotCanvases[p]);
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = COL.card; ctx.fillRect(0, 0, w, h);
+
+    let lo = 0, hi = 0;
+    for (const [key] of def.series) for (let i = i0; i <= i1; i++) { const v = S[key][i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+    const pw = w - M.left - M.right, ph = h - M.top - M.bottom;
+    const X = (tt) => M.left + ((tt - w0) / WINDOW) * pw;
+    const Y = (v) => M.top + ((hi - v) / (hi - lo)) * ph;
+
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textBaseline = "middle";
+    const step = niceStep(hi - lo, 3);
+    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+      ctx.strokeStyle = Math.abs(v) < step * 1e-6 ? "#55554f" : COL.line;
+      ctx.beginPath(); ctx.moveTo(M.left, Y(v)); ctx.lineTo(w - M.right, Y(v)); ctx.stroke();
+      ctx.fillStyle = COL.grey; ctx.textAlign = "right";
+      ctx.fillText(+v.toPrecision(3) + "", M.left - 6, Y(v));
+    }
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (let tt = Math.ceil(w0); tt <= w1 + 1e-9; tt += 1) {
+      ctx.fillStyle = COL.grey; ctx.fillText(tt + "s", X(tt), h - M.bottom + 2);
+    }
+    if (fellAt !== null && fellAt < w1) {
+      ctx.fillStyle = "rgba(214,69,69,0.10)";
+      ctx.fillRect(X(Math.max(fellAt, w0)), M.top, X(w1) - X(Math.max(fellAt, w0)), ph);
+    }
+    for (const [key, , color] of def.series) {
+      const a = S[key];
+      ctx.strokeStyle = color; ctx.lineWidth = 1.3; ctx.beginPath();
+      for (let i = i0; i <= i1; i++) { const px = X(S.t[i]), py = Y(a[i]); i > i0 ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+      ctx.stroke();
+    }
+    ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillStyle = COL.text; ctx.fillText(def.title, M.left, 3);
+    let lx = M.left + ctx.measureText(def.title).width + 14;
+    for (const [, label, color] of def.series) {
+      ctx.fillStyle = color; ctx.fillText(label, lx, 3);
+      lx += ctx.measureText(label).width + 12;
+    }
+    ctx.strokeStyle = COL.text; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(X(t), M.top); ctx.lineTo(X(t), h - M.bottom); ctx.stroke();
+  });
+}
+
+// --- world ---------------------------------------------------------------------
+function drawWorld() {
+  const { ctx, w, h } = fitCanvas($("world"));
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = COL.card; ctx.fillRect(0, 0, w, h);
+
+  const slope = val("slope", t) * RAD, x = val("x", t), r = info.wheel_radius;
+  const th = val("pitch", t) * RAD + slope;             // body angle from the floor normal
+  const thm = val("pitch_meas", t) * RAD + slope;       // what the ESP32 believes
+  const comH = val("com_height", t), comD = val("com_offset", t), mass = val("body_mass", t);
+  const y0 = h - 50, ca = Math.cos(slope), sa = Math.sin(slope);
+  // Floor frame (x along the floor, y up from it) to screen, camera on the axle.
+  const P = ([sx, sy]) => { const dx = sx - x; return [w / 2 + (dx * ca - sy * sa) * scale, y0 - (dx * sa + sy * ca) * scale]; };
+  const groundY = (X) => y0 - (X - w / 2) * Math.tan(slope);
+
+  // Floor.
+  const span = w / 2 / scale + 1;
+  const g1 = P([x - span, 0]), g2 = P([x + span, 0]);
+  ctx.fillStyle = COL.ground;
+  ctx.beginPath(); ctx.moveTo(...g1); ctx.lineTo(...g2); ctx.lineTo(g2[0], h + 400); ctx.lineTo(g1[0], h + 400); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = COL.grey; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(...g1); ctx.lineTo(...g2); ctx.stroke();
+  ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let k = Math.ceil((x - span) * 10); k <= Math.floor((x + span) * 10); k++) {
+    const metre = k % 10 === 0;
+    const a = P([k / 10, 0]), b = P([k / 10, metre ? -0.06 : -0.025]);
+    ctx.strokeStyle = metre ? COL.text : COL.grey; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+    if (metre) { ctx.fillStyle = COL.grey; ctx.fillText(`${k / 10} m`, ...P([k / 10, -0.09])); }
+  }
+
+  const axis = [Math.sin(th), Math.cos(th)], fwd = [Math.cos(th), -Math.sin(th)];
+  const A = [x, r];
+  const at = (hgt, d = 0) => [A[0] + axis[0] * hgt + fwd[0] * d, A[1] + axis[1] * hgt + fwd[1] * d];
+
+  // Body, then the measured-pitch ghost.
+  ctx.lineCap = "round";
+  ctx.strokeStyle = COL.body; ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(6, 0.05 * scale);
+  ctx.beginPath(); ctx.moveTo(...P(A)); ctx.lineTo(...P(at(bodyLen))); ctx.stroke();
+  ctx.globalAlpha = 0.8; ctx.strokeStyle = COL.orange; ctx.lineWidth = 2;
+  const ghost = [A[0] + Math.sin(thm) * bodyLen, A[1] + Math.cos(thm) * bodyLen];
+  ctx.beginPath(); ctx.moveTo(...P(A)); ctx.lineTo(...P(ghost)); ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // IMU.
+  const imu = P(at(info.imu_height));
+  ctx.fillStyle = COL.orange; ctx.fillRect(imu[0] - 4, imu[1] - 4, 8, 8);
+
+  // Centre of mass with its plumb line.
+  const com = P(at(comH, comD));
+  ctx.setLineDash([4, 4]); ctx.strokeStyle = COL.blue; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(...com); ctx.lineTo(com[0], groundY(com[0])); ctx.stroke();
+  ctx.setLineDash([]);
+  if (Math.abs(comD) > 1e-4) {
+    ctx.strokeStyle = COL.blue; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(...P(at(comH))); ctx.lineTo(...com); ctx.stroke();
+  }
+  ctx.fillStyle = COL.blue;
+  ctx.beginPath(); ctx.arc(...com, Math.max(4, 0.011 * Math.sqrt(mass) * scale), 0, 2 * Math.PI); ctx.fill();
+
+  // Wheel with spokes.
+  const hub = P(A), phi = val("wheel_angle", t);
+  ctx.fillStyle = "#1a1a18"; ctx.strokeStyle = COL.text; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(...hub, r * scale, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+  ctx.lineWidth = 2;
+  for (let k = 0; k < 3; k++) {
+    const ang = -phi + (k * 2 * Math.PI) / 3;
+    ctx.strokeStyle = k === 0 ? COL.orange : COL.grey;
+    ctx.beginPath(); ctx.moveTo(...hub); ctx.lineTo(...P([A[0] + 0.9 * r * Math.cos(ang), A[1] + 0.9 * r * Math.sin(ang)])); ctx.stroke();
+  }
+  ctx.fillStyle = COL.text; ctx.beginPath(); ctx.arc(...hub, 3, 0, 2 * Math.PI); ctx.fill();
+
+  // Contact point, red while slipping.
+  const slip = val("slip", t), contact = P([x, 0]);
+  const slipping = Math.abs(slip) > 0.01;
+  ctx.fillStyle = slipping ? COL.red : COL.grey;
+  ctx.beginPath(); ctx.arc(...contact, slipping ? 6 : 3, 0, 2 * Math.PI); ctx.fill();
+  if (slipping) { ctx.fillStyle = COL.red; ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillText(`slip ${slip.toFixed(2)} m/s`, contact[0] + r * scale + 8, contact[1] - 4); }
+
+  // Push arrow along the floor direction, tip on the body.
+  const F = val("push", t);
+  if (Math.abs(F) > 0.5) {
+    const tipW = at(val("push_h", t)), len = Math.min(0.6, Math.abs(F) * 0.004);
+    const tip = P(tipW), tail = P([tipW[0] - Math.sign(F) * len, tipW[1]]);
+    const ang = Math.atan2(tip[1] - tail[1], tip[0] - tail[0]);
+    ctx.strokeStyle = COL.red; ctx.fillStyle = COL.red; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(...tail); ctx.lineTo(...tip); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(...tip);
+    ctx.lineTo(tip[0] - 12 * Math.cos(ang - 0.4), tip[1] - 12 * Math.sin(ang - 0.4));
+    ctx.lineTo(tip[0] - 12 * Math.cos(ang + 0.4), tip[1] - 12 * Math.sin(ang + 0.4));
+    ctx.closePath(); ctx.fill();
+    ctx.textAlign = "center"; ctx.textBaseline = "bottom"; ctx.fillText(`${Math.abs(F).toFixed(0)} N`, tail[0], tail[1] - 6);
+  }
+
+  ctx.textAlign = "left"; ctx.textBaseline = "top"; ctx.font = "13px system-ui, sans-serif";
+  ctx.fillStyle = COL.text; ctx.fillText(title(), 12, 10);
+  if (Math.abs(slope) > 1e-4) { ctx.fillStyle = COL.grey; ctx.fillText(`floor ${(slope / RAD).toFixed(1)} deg`, 12, 30); }
+  if (fellAt !== null && t >= fellAt - 1e-9) {
+    ctx.fillStyle = COL.red; ctx.font = "600 14px system-ui, sans-serif";
+    ctx.fillText(`Fell: passed the 35 deg tilt limit at ${fellAt.toFixed(2)} s`, 12, 50);
+  }
+}
+
+function drawNow() {
+  const v = (k, d) => val(k, t).toFixed(d);
+  const rows = [
+    ["pitch true / measured", `${v("pitch", 2)} / ${v("pitch_meas", 2)} deg`],
+    ["position / ground speed", `${v("x", 2)} m / ${v("speed", 2)} m/s`],
+    ["slip", `${v("slip", 3)} m/s`],
+    ["command sent / at motor", `${v("cmd_sent", 0)} / ${v("cmd_motor", 0)}`],
+    ["wheel rpm true / L / R", `${v("rpm_true", 1)} / ${v("rpm_left", 0)} / ${v("rpm_right", 0)}`],
+    ["battery", `${v("battery_v", 2)} V, ${v("battery_a", 1)} A`],
+    ["push", `${v("push", 0)} N`],
+    ["payload", `${v("body_mass", 1)} kg, COM ${(val("com_offset", t) * 100).toFixed(1)} cm fwd`],
+    ["floor slope", `${v("slope", 1)} deg`],
+  ];
+  $("now").innerHTML = rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("");
+}
+
+function frame(ts) {
+  if (last !== null && playing && ready()) {
+    t += ((ts - last) / 1000) * speed;
+    if (t >= head) {
+      t = head;
+      if (fellAt !== null) { playing = false; setPlay(); }
+    }
+  }
+  last = ts;
+  if (playing && head - t < 0.05) requestStep(Math.max(2, Math.ceil((speed * 0.1) / DT)) * DT);
+  if (ready()) {
+    drawWorld();
+    drawPlots();
+    drawNow();
+    $("scrub").value = head > S.t[0] ? Math.round(((t - S.t[0]) / (head - S.t[0])) * 1000) : 0;
+    $("clock").textContent = `${t.toFixed(2)} / ${head.toFixed(2)} s`;
+  }
+  requestAnimationFrame(frame);
+}
+
+async function init() {
+  let meta;
+  try { meta = await api("/api/info"); } catch (e) {
+    document.body.innerHTML = '<p style="padding:20px">The live sim is not running. From the repo root run <code>.venv/bin/python sim/live.py</code>, then open <a style="color:#3987e5" href="http://localhost:8765">http://localhost:8765</a>.</p>';
+    return;
+  }
+  algos = meta.algorithms; defaults = meta.defaults; cond = { ...defaults };
+  for (const a of algos) $("algo").add(new Option(a.label, a.key));
+  $("algo").value = algo;
+  await restart();
+  requestAnimationFrame(frame);
+}
+
+init();
+</script>
+</body>
+</html>
