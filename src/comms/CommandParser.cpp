@@ -1,5 +1,6 @@
 #include "CommandParser.h"
 #include "../config.h"
+#include "../hal/ServoControl.h"
 #include "../hal/OffsetStorage.h"
 #include <math.h>
 
@@ -59,6 +60,8 @@ void CommandParser::handleCommand(
     Print& output,
     RobotState& state
 ) {
+    if (handleServoCommand(command, output)) return;
+
     if (strcmp(command, "ENABLE") == 0) {
         state.enabled = true;
         state.lastCommandMs = millis();
@@ -68,6 +71,8 @@ void CommandParser::handleCommand(
 
     if (strcmp(command, "DISABLE") == 0) {
         state.enabled = false;
+        state.velIntegral = 0.0f;
+        state.targetPitchDeg = 0.0f;
         state.targetLinear = 0.0f;
         state.targetAngular = 0.0f;
         output.println("OK DISABLED");
@@ -87,8 +92,84 @@ void CommandParser::handleCommand(
         return;
     }
 
+    if (strncmp(command, "SET_PID_FB ", 11) == 0) {
+        float front, back, ki, kd;
+        char extra = '\0';
+        if (sscanf(command, "SET_PID_FB %f %f %f %f %c", &front, &back, &ki, &kd, &extra) != 4) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        if (!isfinite(front) || !isfinite(back) || !isfinite(ki) || !isfinite(kd) ||
+            front < 0 || front > 5 || back < 0 || back > 5 ||
+            ki < 0 || ki > 5 || kd < 0 || kd > 5) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        state.balanceKp = front;
+        state.balanceKpBack = back;
+        state.balanceKi = ki;
+        state.balanceKd = kd;
+        state.resetBalanceRequested = true;
+        state.lastCommandMs = millis();
+        output.println("OK SET_PID_FB");
+        return;
+    }
+
     if (strncmp(command, "SET_PID ", 8) == 0) {
         handlePidCommand(command, output, state);
+        return;
+    }
+
+    if (strncmp(command, "SET_D_BOOST ", 12) == 0) {
+        float boost, width;
+        char extra = '\0';
+        if (sscanf(command, "SET_D_BOOST %f %f %c", &boost, &width, &extra) != 2) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        if (!isfinite(boost) || !isfinite(width) || boost < 0.0f || boost > 4.0f ||
+            width < 0.1f || width > 35.0f) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        state.balanceDBoost = boost;
+        state.balanceDWidth = width;
+        state.lastCommandMs = millis();
+        output.println("OK SET_D_BOOST");
+        return;
+    }
+
+    if (strncmp(command, "SET_P_WIDTH ", 12) == 0) {
+        float width = 0.0f;
+        char extra = '\0';
+        if (sscanf(command, "SET_P_WIDTH %f %c", &width, &extra) != 1) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        if (!isfinite(width) || width < 0.1f || width > 5.0f) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        state.balancePBoostWidth = width;
+        state.lastCommandMs = millis();
+        output.println("OK SET_P_WIDTH");
+        return;
+    }
+
+    if (strncmp(command, "SET_P_BOOST ", 12) == 0) {
+        float boost = 0.0f;
+        char extra = '\0';
+        if (sscanf(command, "SET_P_BOOST %f %c", &boost, &extra) != 1) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        if (!isfinite(boost) || boost < 0.0f || boost > 2.0f) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        state.balancePBoost = boost;
+        state.lastCommandMs = millis();
+        output.println("OK SET_P_BOOST");
         return;
     }
 
@@ -150,6 +231,26 @@ void CommandParser::handleCommand(
 
     if (strncmp(command, "SET_TRIM ", 9) == 0) {
         handleTrimCommand(command, output, state);
+        return;
+    }
+
+    if (strncmp(command, "SET_FUSION ", 11) == 0) {
+        float diameter, tau;
+        char extra = '\0';
+        if (sscanf(command, "SET_FUSION %f %f %c", &diameter, &tau, &extra) != 2) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        if (!isfinite(diameter) || !isfinite(tau) ||
+            (diameter != 0 && (diameter < 50 || diameter > 500)) || tau < 0 || tau > 1) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        state.wheelDiameterMm = diameter;
+        state.velocityFusionTau = tau;
+        state.resetBalanceRequested = true;
+        state.lastCommandMs = millis();
+        output.println("OK SET_FUSION");
         return;
     }
 
@@ -267,6 +368,7 @@ void CommandParser::handlePidCommand(
 
     // Generous sanity bounds; kp=5 already means full output at 0.2 deg error.
     const bool outOfRange =
+        !isfinite(kp) || !isfinite(ki) || !isfinite(kd) ||
         kp < 0.0f || kp > 5.0f ||
         ki < 0.0f || ki > 5.0f ||
         kd < 0.0f || kd > 5.0f;
@@ -277,6 +379,7 @@ void CommandParser::handlePidCommand(
     }
 
     state.balanceKp = kp;
+    state.balanceKpBack = kp;
     state.balanceKi = ki;
     state.balanceKd = kd;
     state.lastCommandMs = millis();
@@ -328,10 +431,22 @@ void CommandParser::printState(
     output.print(state.targetAngular, 3);
     output.print(" kp=");
     output.print(state.balanceKp, 4);
+    output.print(" kp_front=");
+    output.print(state.balanceKp, 4);
+    output.print(" kp_back=");
+    output.print(state.balanceKpBack, 4);
     output.print(" ki=");
     output.print(state.balanceKi, 4);
     output.print(" kd=");
     output.print(state.balanceKd, 4);
+    output.print(" dboost=");
+    output.print(state.balanceDBoost, 3);
+    output.print(" dwidth=");
+    output.print(state.balanceDWidth, 3);
+    output.print(" pboost=");
+    output.print(state.balancePBoost, 3);
+    output.print(" pwidth=");
+    output.print(state.balancePBoostWidth, 3);
     output.print(" trim=");
     output.print(state.pitchTrimDeg, 2);
     output.print(" pitch=");
@@ -354,5 +469,20 @@ void CommandParser::printState(
     output.print(" wheel_l=");
     output.print(state.leftWheelSpeed, 0);
     output.print(" wheel_r=");
-    output.println(state.rightWheelSpeed, 0);
+    output.print(state.rightWheelSpeed, 0);
+    output.print(" vkp="); output.print(state.velKp, 5);
+    output.print(" vki="); output.print(state.velKi, 5);
+    output.print(" vsign="); output.print(state.velSign, 0);
+    output.print(" fused_velocity="); output.print(state.fusedVelocity, 2);
+    output.print(" wheel_mm="); output.print(state.wheelDiameterMm, 1);
+    output.print(" fusion_tau="); output.print(state.velocityFusionTau, 2);
+    output.print(" velocity="); output.print(state.wheelVelocity, 1);
+    output.print(" target_pitch="); output.print(state.targetPitchDeg, 3);
+    output.print(" vint="); output.print(state.velIntegral, 3);
+    const unsigned long age = millis() - state.lastMotorFeedbackMs;
+    output.print(" wheel_age_ms=");
+    if (state.lastMotorFeedbackMs == 0) output.print(-1);
+    else output.print(age);
+    output.print(" wheel_fresh=");
+    output.println(state.lastMotorFeedbackMs != 0 && age <= WHEEL_FEEDBACK_STALE_MS ? 1 : 0);
 }

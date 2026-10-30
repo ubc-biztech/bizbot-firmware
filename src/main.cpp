@@ -12,9 +12,12 @@
 #include <WiFi.h>
 
 #include "comms/CommandParser.h"
+#include "hal/ServoControl.h"
 #include "config.h"
 #include "control/BalanceController.h"
 #include "control/AccelerationFeedback.h"
+#include "control/VelocityControl.h"
+#include "control/VelocityEstimator.h"
 #include "hal/Imu.h"
 #include "hal/OffsetStorage.h"
 #include "robot/RobotState.h"
@@ -26,6 +29,7 @@ RobotState robotState;
 CommandParser usbCommandParser;
 CommandParser wifiCommandParser;
 Imu imu;
+VelocityEstimator velocityEstimator;
 BalanceController balanceController(
     BALANCE_KP,
     BALANCE_KI,
@@ -65,6 +69,8 @@ bool wifiControlWasConnected = false;
 
 void onEnabled() {
     balanceController.reset();
+    robotState.velIntegral = 0.0f;
+    robotState.targetPitchDeg = 0.0f;
     latchedImuFault = false;
     robotState.targetLinear = 0.0f;
     robotState.targetAngular = 0.0f;
@@ -156,16 +162,16 @@ bool tiltLimitExceeded() {
 }
 
 void stopRobot(const char* reason) {
+    velocityEstimator.reset();
     disableRobot();
 
     DebugSerial.print("FAULT ");
     DebugSerial.println(reason);
 }
 
-// Outer loop: wheel RPM -> target pitch. Returns the angle-only target when
-// the loop is off, and holds its last value while wheel feedback is stale so
-// balancing never depends on the hoverboard talking back.
-float velocityLoop() {
+// Outer loop: wheel RPM -> target pitch. Losing feedback returns the target
+// to neutral without disabling the inner balance loop.
+float velocityLoop(float dtSeconds) {
     const bool active = robotState.velKp > 0.0f || robotState.velKi > 0.0f;
     if (!active) {
         robotState.velIntegral = 0.0f;
@@ -175,21 +181,16 @@ float velocityLoop() {
     const bool fresh = robotState.lastMotorFeedbackMs != 0 &&
         millis() - robotState.lastMotorFeedbackMs <= WHEEL_FEEDBACK_STALE_MS;
     if (!fresh) {
-        return robotState.targetPitchDeg;
+        robotState.velIntegral = 0.0f;
+        return velocityNeutral(robotState.targetPitchDeg,
+            WHEEL_STALE_RETURN_DEG_PER_SEC * dtSeconds);
     }
 
     const float vTarget = robotState.targetLinear * MAX_WHEEL_RPM;
-    const float vErr = vTarget - robotState.wheelVelocity;
+    const float vErr = vTarget - robotState.fusedVelocity;
 
-    robotState.velIntegral += vErr * CONTROL_DT_SECONDS;
-    if (robotState.velKi > 0.0f) {
-        const float lim = MAX_VEL_LEAN_DEG / robotState.velKi;
-        robotState.velIntegral = constrain(robotState.velIntegral, -lim, lim);
-    }
-
-    const float lean = robotState.velSign *
-        (robotState.velKp * vErr + robotState.velKi * robotState.velIntegral);
-    return constrain(lean, -MAX_VEL_LEAN_DEG, MAX_VEL_LEAN_DEG);
+    return robotState.velSign * velocityPI(vErr, robotState.velKp,
+        robotState.velKi, dtSeconds, MAX_VEL_LEAN_DEG, robotState.velIntegral);
 }
 
 void startWifiControl() {
@@ -258,10 +259,13 @@ void updateCommandInput() {
     usbCommandParser.update(DebugSerial, DebugSerial, robotState);
 }
 
-void runControlLoop() {
+void runControlLoop(float dtSeconds) {
     if (robotState.resetBalanceRequested) {
         balanceController.reset();
+        robotState.velIntegral = 0.0f;
+        robotState.targetPitchDeg = 0.0f;
         robotState.resetBalanceRequested = false;
+        velocityEstimator.reset();
     }
 #if IMU_USE_STUB
     // The stub reports a permanently upright robot and must never drive motors.
@@ -305,9 +309,16 @@ void runControlLoop() {
         robotState.forwardAccel, robotState.accelGain,
         MAX_ACCEL_OUTPUT, robotState.pitchDeg);
     robotState.lastImuUpdateMs = millis();
+    const bool wheelFresh = robotState.lastMotorFeedbackMs != 0 &&
+        millis() - robotState.lastMotorFeedbackMs <= WHEEL_FEEDBACK_STALE_MS;
+    robotState.fusedVelocity = velocityEstimator.update(
+        robotState.wheelVelocity, robotState.forwardAccel, dtSeconds,
+        robotState.wheelDiameterMm, robotState.velocityFusionTau, wheelFresh);
 
     if (!robotState.enabled) {
         balanceController.reset();
+        robotState.velIntegral = 0.0f;
+        robotState.targetPitchDeg = 0.0f;
         Send(0, 0);
         return;
     }
@@ -328,14 +339,20 @@ void runControlLoop() {
         robotState.balanceKd
     );
 
-    robotState.targetPitchDeg = velocityLoop();
+    balanceController.setDirectionalP(robotState.balanceKp, robotState.balanceKpBack);
+    balanceController.setProportionalBoost(
+        robotState.balancePBoost, robotState.balancePBoostWidth);
+    balanceController.setDerivativeBoost(
+        robotState.balanceDBoost, robotState.balanceDWidth);
+
+    robotState.targetPitchDeg = velocityLoop(dtSeconds);
 
     const BalanceOutput output = balanceController.update(
         robotState.targetPitchDeg,
         robotState.targetAngular,
         robotState.pitchDeg,
         robotState.pitchRateDegPerSec,
-        CONTROL_DT_SECONDS
+        dtSeconds
     );
 
     const float correctedSpeed = constrain(
@@ -400,9 +417,15 @@ void setup() {
         DebugSerial.println("OK IMU_INIT");
     }
 
+    robotState.wheelDiameterMm = WHEEL_DIAMETER_MM;
     robotState.balanceKp = BALANCE_KP;
+    robotState.balanceKpBack = BALANCE_KP;
     robotState.balanceKi = BALANCE_KI;
     robotState.balanceKd = BALANCE_KD;
+    robotState.balancePBoost = BALANCE_P_BOOST_DEG;
+    robotState.balancePBoostWidth = BALANCE_P_BOOST_WIDTH_DEG;
+    robotState.balanceDBoost = BALANCE_D_BOOST;
+    robotState.balanceDWidth = BALANCE_D_WIDTH_DEG;
     robotState.accelGain = ACCEL_GAIN;
     robotState.velKp = VEL_KP;
     robotState.velKi = VEL_KI;
@@ -411,10 +434,12 @@ void setup() {
 
     robotState.lastCommandMs = millis();
     DebugSerial.println("BizBot firmware ready");
+    lastControlUs = micros();
 }
 
 void loop() {
     updateCommandInput();
+    updateServos();
 
     if (robotState.enabled && !wasEnabled) {
         onEnabled();
@@ -424,8 +449,12 @@ void loop() {
     Receive();
 
     const uint32_t now = micros();
-    if (now - lastControlUs >= CONTROL_PERIOD_US) {
-        lastControlUs += CONTROL_PERIOD_US;
-        runControlLoop();
+    const uint32_t elapsedUs = now - lastControlUs;
+    if (elapsedUs >= CONTROL_PERIOD_US) {
+        lastControlUs = now; // Skip missed cycles instead of replaying them.
+        if (elapsedUs > 100000 && robotState.enabled) {
+            stopRobot("CONTROL_OVERRUN");
+        }
+        runControlLoop(fminf(elapsedUs * 1e-6f, 0.1f));
     }
 }

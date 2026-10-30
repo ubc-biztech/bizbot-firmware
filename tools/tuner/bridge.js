@@ -46,6 +46,15 @@ export function attachBridge(httpServer, { host, port, log = console.log }) {
     child.stdout.on("data", onData);
     child.stderr.on("data", (c) => broadcast({ type: "log", text: c.toString("utf8").trim() }));
     const me = child;
+    child.on("error", (err) => {
+      const text = `Cannot launch ${PYTHON}: ${err.message}. Run python3 -m venv .venv and .venv/bin/python -m pip install -r requirements.txt from the project root.`;
+      log(`[bridge] ${text}`);
+      broadcast({ type: "log", text });
+      if (child === me) { child = null; status(); }
+    });
+    child.stdin.on("error", (err) => {
+      broadcast({ type: "log", text: `Command pipe failed: ${err.message}` });
+    });
     child.on("exit", (code) => {
       log(`[bridge] keyboard_controls.py exited (${code})`);
       if (child !== me) return; // an old, already-replaced child; ignore it

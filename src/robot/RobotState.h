@@ -18,15 +18,23 @@ struct RobotState {
 
     // Live-tunable balance gains (initialized from config in setup(); SET_PID
     // changes them at runtime, lost on reboot).
-    float balanceKp = 0.0f;
+    float balanceKp = 0.0f; // forward lean relative to target
+    float balanceKpBack = 0.0f;
     float balanceKi = 0.0f;
     float balanceKd = 0.0f;
+    float balancePBoost = 0.0f;
+    float balancePBoostWidth = 0.5f;
+    float balanceDBoost = 0.0f;
+    float balanceDWidth = 5.0f;
 
     // Outer velocity loop (SET_VEL / SET_VEL_SIGN), see config.h.
     float velKp = 0.0f;
     float velKi = 0.0f;
     float velSign = -1.0f;
     float wheelVelocity = 0.0f;      // mean wheel RPM, forward positive
+    float fusedVelocity = 0.0f; // RPM equivalent
+    float wheelDiameterMm = 0.0f; // initialized from config in setup
+    float velocityFusionTau = 0.2f; // seconds; zero selects wheels only
     float velIntegral = 0.0f;        // integrated velocity error
     float targetPitchDeg = 0.0f;     // what the angle loop is tracking
 

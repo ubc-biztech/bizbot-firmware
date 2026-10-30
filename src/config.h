@@ -8,15 +8,22 @@ constexpr uint16_t START_FRAME = 0xABCD;
 constexpr int HOVER_RX_PIN = 25;
 constexpr int HOVER_TX_PIN = 26;
 
+// Servo signal outputs (50 Hz PWM). Calibrate pulse limits for your model.
+// Power servos from a separate supply rated for the servos, with common GND.
+constexpr int SERVO_1_PIN = 18;
+constexpr int SERVO_2_PIN = 19;
+constexpr int SERVO_3_PIN = 23;
+constexpr int SERVO_MIN_PULSE_US = 1000;
+constexpr int SERVO_MAX_PULSE_US = 2000;
+
 // Local Wi-Fi control. Change the password before using the robot in public.
 constexpr char WIFI_AP_SSID[] = "BizBot-Control";
 constexpr char WIFI_AP_PASSWORD[] = "bizbot-control";
 constexpr uint16_t WIFI_CONTROL_PORT = 3333;
 
-// Max hoverboard command magnitude (EFeru range ±1000). With the balance
-// output capped at 0.20, the largest command actually sent is 0.20 * this.
-// Motors need roughly 100 to turn under no load, so 500 gives the controller
-// real authority (max ~10% power) while still restrained for testing.
+// Scale normalized commands into the EFeru command range (±1000).
+// Balance is capped at 0.55 * 500 = ±275; steering is scaled separately.
+// Command magnitude is not a percentage of motor power.
 constexpr int16_t MAX_HOVERBOARD_COMMAND = 500;
 
 // Control loop timing
@@ -28,12 +35,21 @@ constexpr float BALANCE_KP = 0.04f;
 constexpr float BALANCE_KI = 0.0f;
 constexpr float BALANCE_KD = 0.001f;
 
+// Smooth extra P authority near upright: kp * boost * tanh(error / width).
+// Multiplies the near-zero P slope by 2.3; extra output caps at kp * 0.65.
+constexpr float BALANCE_P_BOOST_DEG = 0.65f;
+constexpr float BALANCE_P_BOOST_WIDTH_DEG = 0.5f;
+
+// D gain grows smoothly with absolute angle error. Boost 0 disables it.
+constexpr float BALANCE_D_BOOST = 0.0f;
+constexpr float BALANCE_D_WIDTH_DEG = 5.0f;
+
 // Map PID correction to the installed motors' forward/backward direction.
-constexpr float BALANCE_MOTOR_SIGN = -1.0f;
+constexpr float BALANCE_MOTOR_SIGN = 1.0f;
 
 // Balance controller output limits (normalized [-1, 1])
 constexpr float MAX_LEAN_DEG = 5.0f;
-constexpr float MAX_BALANCE_OUTPUT = 0.30f;
+constexpr float MAX_BALANCE_OUTPUT = 0.55f;
 constexpr float MAX_TURN_OUTPUT = 0.15f;
 
 // Outer wheel-velocity loop: mean wheel RPM -> target pitch (deg).
@@ -50,10 +66,12 @@ constexpr float VEL_SIGN = -1.0f;
 constexpr float WHEEL_RIGHT_SIGN = -1.0f;
 // Wheel RPM commanded by CMD_VEL linear=1.0 when the velocity loop is active.
 constexpr float MAX_WHEEL_RPM = 60.0f;
+constexpr float WHEEL_DIAMETER_MM = 160.0f;
 // The outer loop may never ask for more lean than this.
 constexpr float MAX_VEL_LEAN_DEG = 3.0f;
-// Wheel feedback older than this freezes the outer loop (never gates balance).
+// Stale feedback clears velocity I and slews the target back to neutral.
 constexpr unsigned long WHEEL_FEEDBACK_STALE_MS = 200;
+constexpr float WHEEL_STALE_RETURN_DEG_PER_SEC = 3.0f;
 
 // Laptop keepalive should be faster than this (keyboard_controls.py uses 200 ms).
 constexpr unsigned long COMMAND_TIMEOUT_MS = 500;
@@ -106,7 +124,7 @@ constexpr float PITCH_TRIM_DEG = 2.34f;
 // UART-RVC gives no gyro, so pitch rate is derived by differentiating pitch and
 // low-pass filtering. Alpha in (0,1]: higher = more responsive/noisier, lower =
 // smoother/laggier. Rate inherits IMU_PITCH_SIGN via pitchDeg, so no rate sign.
-constexpr float IMU_RATE_LPF_ALPHA = 0.15f;
+constexpr float IMU_RATE_LPF_ALPHA = 0.30f;
 
 // Side-mounted RVC module: sensor Y is fore/aft, gravity is near +X at rest.
 // Verify stationary tilted readings and forward sign after remounting.

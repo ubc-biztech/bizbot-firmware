@@ -7,9 +7,16 @@ const $ = (id) => document.getElementById(id);
 // Gains live in this browser (localStorage) and are pushed TO the robot
 // whenever it (re)connects. The robot's own values are never read back.
 const GAINS_KEY = "bizbot-gains";
-const gains = { kp: 0.04, ki: 0, kd: 0.001, trim: 0, vkp: 0, vki: 0 };
+const gains = { kp: 0.04, ki: 0, kd: 0.001, pboost: 0.65, pwidth: 0.5, dboost: 0, dwidth: 5, wheel_mm: 160, fusion_tau: 0.2, trim: 0, vkp: 0, vki: 0 };
 try { Object.assign(gains, JSON.parse(localStorage.getItem(GAINS_KEY)) || {}); } catch {}
+if (!Number.isFinite(gains.kp_back)) gains.kp_back = gains.kp;
 function persistGains() { try { localStorage.setItem(GAINS_KEY, JSON.stringify(gains)); } catch {} }
+// Adopt the measured diameter once, preserving later deliberate changes.
+if (gains.wheel_setup_version !== 1) {
+  gains.wheel_mm = 160;
+  gains.wheel_setup_version = 1;
+  persistGains();
+}
 const live = {}; // last key=value telemetry
 let haveGains = true;
 let pushedToRobot = false;
@@ -135,9 +142,22 @@ function pushGainsToRobot() {
 // --- gains UI ---------------------------------------------------------------
 const rows = {
   "pid-gains": [
-    { key: "kp", steps: [0.001, 0.005, 0.01, 0.02], def: 0.01, min: 0, max: 5, send: sendPid },
+    { key: "kp_back", label: "P back", steps: [0.001, 0.005, 0.01, 0.02], def: 0.01, min: 0, max: 5, send: sendPid },
+    { key: "kp", label: "P front", steps: [0.001, 0.005, 0.01, 0.02], def: 0.01, min: 0, max: 5, send: sendPid },
     { key: "ki", steps: [0.0005, 0.001, 0.005], def: 0.001, min: 0, max: 5, send: sendPid },
     { key: "kd", steps: [0.0001, 0.0005, 0.001, 0.002], def: 0.0005, min: 0, max: 5, send: sendPid },
+  ],
+  "boost-gains": [
+    { key: "pwidth", label: "Width", steps: [0.05, 0.1, 0.25], def: 0.05, min: 0.1, max: 5, send: sendWidth },
+    { key: "pboost", label: "Boost", steps: [0.05, 0.1, 0.25], def: 0.05, min: 0, max: 2, send: sendBoost },
+  ],
+  "dboost-gains": [
+    { key: "dboost", label: "Boost", steps: [0.1, 0.25, 0.5], def: 0.1, min: 0, max: 4, send: sendDBoost },
+    { key: "dwidth", label: "Angle", steps: [0.1, 0.5, 1], def: 0.5, min: 0.1, max: 35, send: sendDBoost },
+  ],
+  "fusion-gains": [
+    { key: "wheel_mm", label: "Ø mm", steps: [1, 5, 10], def: 1, min: 0, max: 500, send: sendFusion },
+    { key: "fusion_tau", label: "τ sec", steps: [0.01, 0.05, 0.1], def: 0.05, min: 0, max: 1, send: sendFusion },
   ],
   "vel-gains": [
     { key: "vkp", steps: [0.01, 0.02, 0.05, 0.1], def: 0.02, min: 0, max: 1, send: sendVel },
@@ -156,7 +176,7 @@ function buildGains() {
       const el = document.createElement("div");
       el.className = "gain";
       el.innerHTML = `
-        <label>${row.key}</label>
+        <label>${row.label || row.key}</label>
         <div class="ctl">
           <button class="step" data-dir="-1">−</button>
           <input type="number" step="any" />
@@ -200,7 +220,23 @@ function renderGains() {
 const fmt = (v) => (Number.isFinite(v) ? Number(v.toFixed(5)).toString() : "");
 
 function sendPid() {
-  send(`SET_PID ${fmt(gains.kp)} ${fmt(gains.ki)} ${fmt(gains.kd)}`);
+  send(`SET_PID_FB ${fmt(gains.kp)} ${fmt(gains.kp_back)} ${fmt(gains.ki)} ${fmt(gains.kd)}`);
+}
+function sendDBoost() {
+  send(`SET_D_BOOST ${fmt(gains.dboost)} ${fmt(gains.dwidth)}`);
+}
+function sendWidth() {
+  send(`SET_P_WIDTH ${fmt(gains.pwidth)}`);
+}
+function sendBoost() {
+  send(`SET_P_BOOST ${fmt(gains.pboost)}`);
+}
+function sendFusion() {
+  if (gains.wheel_mm !== 0 && gains.wheel_mm < 50) {
+    showFault("Wheel diameter must be 50–500 mm, or 0 for wheel-only feedback.", true);
+    return;
+  }
+  send(`SET_FUSION ${fmt(gains.wheel_mm)} ${fmt(gains.fusion_tau)}`);
 }
 function sendVel() {
   send(`SET_VEL ${fmt(gains.vkp)} ${fmt(gains.vki)}`);
@@ -211,6 +247,16 @@ function sendTrim() {
 
 // --- readouts ----------------------------------------------------------------
 const READOUTS = [
+  ["velocity", "wheel RPM"],
+  ["fused_velocity", "fused RPM"],
+  ["wheel_mm", "active wheel mm"],
+  ["fusion_tau", "active fusion sec"],
+  ["kp_front", "active P front"],
+  ["kp_back", "active P back"],
+  ["dboost", "active D boost"],
+  ["dwidth", "D half-boost angle °"],
+  ["pboost", "active P boost °"],
+  ["pwidth", "active boost width °"],
   ["pitch", "pitch °"],
   ["pitch_rate", "rate °/s"],
   ["trim", "trim °"],
@@ -286,10 +332,17 @@ function renderPresets() {
     el.innerHTML = `<button title="kp ${g.kp} ki ${g.ki} kd ${g.kd}"></button><button class="x" title="delete">×</button>`;
     el.firstChild.textContent = name;
     el.firstChild.onclick = () => {
-      Object.assign(gains, { kp: g.kp, ki: g.ki, kd: g.kd });
+      Object.assign(gains, { kp: g.kp, kp_back: Number.isFinite(g.kp_back) ? g.kp_back : g.kp, ki: g.ki, kd: g.kd });
+      if (Number.isFinite(g.pboost)) gains.pboost = g.pboost;
+      if (Number.isFinite(g.pwidth)) gains.pwidth = g.pwidth;
+      if (Number.isFinite(g.dboost)) gains.dboost = g.dboost;
+      if (Number.isFinite(g.dwidth)) gains.dwidth = g.dwidth;
       persistGains();
       renderGains();
       sendPid();
+      sendDBoost();
+      sendWidth();
+      sendBoost();
     };
     el.lastChild.onclick = () => { delete presets[name]; savePresets(presets); renderPresets(); };
     box.appendChild(el);
@@ -299,7 +352,7 @@ function renderPresets() {
 $("btn-save-preset").onclick = () => {
   const name = $("preset-name").value.trim() || `set ${new Date().toLocaleTimeString([], { hour12: false })}`;
   const presets = loadPresets();
-  presets[name] = { kp: gains.kp, ki: gains.ki, kd: gains.kd };
+  presets[name] = { kp: gains.kp, kp_back: gains.kp_back, ki: gains.ki, kd: gains.kd, pboost: gains.pboost, pwidth: gains.pwidth, dboost: gains.dboost, dwidth: gains.dwidth };
   savePresets(presets);
   $("preset-name").value = "";
   renderPresets();
@@ -307,6 +360,7 @@ $("btn-save-preset").onclick = () => {
 renderPresets();
 
 
+$("btn-fusion").onclick = sendFusion;
 $("btn-state").onclick = () => send("GET_STATE");
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") send("DISABLE");

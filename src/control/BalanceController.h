@@ -20,6 +20,15 @@ public:
     );
 
     void setTunings(float kp, float ki, float kd);
+    void setProportionalBoost(float boost, float width) {
+        balancePid.setProportionalBoost(boost, width);
+    }
+    void setDirectionalP(float front, float back) {
+        balancePid.setDirectionalP(front, back);
+    }
+    void setDerivativeBoost(float boost, float width) {
+        balancePid.setDerivativeBoost(boost, width);
+    }
     void reset();
 
     // Last balance PID terms, for tuning diagnostics.

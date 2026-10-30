@@ -28,8 +28,15 @@
 
     <main>
       <section class="card">
-        <h2>Pitch loop <small>SET_PID</small></h2>
+        <h2>Pitch loop <small>SET_PID_FB</small></h2>
         <div class="gains" id="pid-gains"></div>
+        <p class="hint">P front applies when pitch is above the trimmed target (forward lean); P back applies below it. Both use the P boost settings. I and D are shared. Reboot restores both P gains to 0.04.</p>
+        <h2 style="margin-top:16px">Large-angle D boost</h2>
+        <div class="gains" id="dboost-gains"></div>
+        <p class="hint">Boost adds damping as angle error grows in either direction. 0 = off; 1 approaches 2× base D at large angles. Angle (°) is where half the extra boost applies. Base D is unchanged at zero error. Reboot restores Boost 0 and Angle 5°.</p>
+        <h2 style="margin-top:16px">Near-zero P boost</h2>
+        <div class="gains" id="boost-gains"></div>
+        <p class="hint">Boost sets extra P response (0 = off). Width sets the angle-error range around the balance target: smaller = tighter and stronger near zero; larger = broader and gentler. The transition is smooth, not a cutoff. Changes apply live; reboot restores Boost 0.65° and Width 0.5°. Active values appear below.</p>
         <p class="hint">Values are saved in this browser and sent when you change them.</p>
       </section>
 
@@ -37,6 +44,10 @@
       <section class="card">
         <h2>Velocity loop <small>SET_VEL</small> <button id="btn-vsign" class="mini">Flip sign</button></h2>
         <div class="gains" id="vel-gains"></div>
+        <h2 style="margin-top:16px">Velocity sensor fusion</h2>
+        <div class="gains" id="fusion-gains"></div>
+        <button id="btn-fusion" class="mini">Apply fusion settings</button>
+        <p class="hint">Enter measured wheel diameter (50–500 mm). Diameter 0 or τ 0 = wheel-only. Larger τ gives acceleration more influence; 0.2 s is the starting value. Missing wheel feedback still returns the target toward neutral. Reboot restores diameter 160 mm and τ 0.2 s. Reapply any custom values after reconnecting.</p>
         <p class="hint">Wheel RPM → target lean (deg per RPM, capped at 3°). Both 0 = off. Resets to 0 on robot reboot. Check wheel L/R move when you push the robot first. Start vkp 0.05, then vki 0.02. Runs away instead of stopping = flip sign.</p>
       </section>
 
@@ -53,7 +64,7 @@
           <input type="text" id="preset-name" placeholder="name, e.g. kp08-kd002" />
           <button id="btn-save-preset">Save current</button>
         </div>
-        <p class="hint">Recall sends the pitch gains (not trim).</p>
+        <p class="hint">Recall sends the pitch gains and P/D boost settings (not trim).</p>
       </section>
 
       <section class="card readouts">

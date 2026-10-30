@@ -13,6 +13,9 @@ public:
 
     void setTunings(float kp, float ki, float kd);
     void setOutputLimits(float minOutput, float maxOutput);
+    void setProportionalBoost(float errorBoost, float errorWidth);
+    void setDirectionalP(float front, float back);
+    void setDerivativeBoost(float boost, float width);
     void reset();
 
     // Last computed terms (pre-clamp), for tuning diagnostics.
@@ -26,10 +29,15 @@ private:
     float lastD = 0.0f;
 
     float kp;
+    float kpBack;
     float ki;
     float kd;
 
     float integral = 0.0f;
+    float proportionalBoost = 0.0f;
+    float proportionalWidth = 1.0f;
+    float derivativeBoost = 0.0f;
+    float derivativeWidth = 5.0f;
 
     float minOutput = -1.0f;
     float maxOutput = 1.0f;

@@ -10,6 +10,9 @@ BalanceController::BalanceController(float kp, float ki, float kd)
         -MAX_BALANCE_OUTPUT,
         MAX_BALANCE_OUTPUT
     );
+    balancePid.setProportionalBoost(
+        BALANCE_P_BOOST_DEG, BALANCE_P_BOOST_WIDTH_DEG
+    );
 }
 
 BalanceOutput BalanceController::update(
