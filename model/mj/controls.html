@@ -2,50 +2,152 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Bizbot simulation controls</title>
+<title>Bizbot simulation</title>
 <style>
-:root {color-scheme:dark;font:15px system-ui;background:#171b23;color:#e8edf5}
-body {max-width:480px;margin:32px auto;padding:0 20px}
-h1 {font-size:22px;margin-bottom:8px} h2 {font-size:17px;margin-top:0}
-section {background:#242b37;border:1px solid #394353;border-radius:12px;padding:20px;margin:18px 0}
-p {color:#aebbd0;line-height:1.5} .row {display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px}
-input[type=range] {width:100%;margin:12px 0;accent-color:#83c7ff}
-input[type=number] {width:80px;background:#171b23;color:inherit;border:1px solid #536176;border-radius:6px;padding:7px;font:inherit}
-button {background:#86c9ff;color:#112134;border:0;padding:12px 18px;border-radius:8px;font:600 15px system-ui;cursor:pointer;flex:1}
-button:disabled {opacity:.4;cursor:default} button.secondary {background:#394353;color:inherit;width:100%}
-button.held {background:#b7e8b7} #drive-pad {outline-offset:6px} #drive-pad button {touch-action:none;user-select:none}
-#status {font-size:13px;color:#aebbd0} #force-status {min-height:24px;font-variant-numeric:tabular-nums}
+:root {
+  color-scheme: dark;
+  --bg:#111418; --surface:#1C2127; --surface-2:#252A31; --surface-3:#2F343C; --border:#383E47; --line:rgba(255,255,255,.07);
+  --text:#F6F7F9; --muted:#ABB3BF; --dim:#738091;
+  --blue:#2D72D2; --blue-hi:#4C90F0; --red:#CD4246; --red-hi:#E76A6E; --green:#32A467; --orange:#EC9A3C;
+  --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;
+  --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  font:13px/1.45 var(--sans); background:var(--bg); color:var(--text);
+}
+* {box-sizing:border-box}
+body {margin:0;min-height:100vh;display:flex;flex-direction:column}
+.topbar {height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:var(--surface);border-bottom:1px solid var(--border)}
+.brand {display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:.02em}
+.mark {width:14px;height:14px;border-radius:2px;background:linear-gradient(135deg,var(--blue-hi),var(--blue));box-shadow:0 0 0 1px rgba(76,144,240,.35)}
+.crumb {color:var(--muted);font-weight:500} .sep {color:var(--dim)}
+.top-right {display:flex;align-items:center;gap:14px}
+.conn {display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+.dot {width:8px;height:8px;border-radius:50%;background:var(--dim)} .dot.on {background:var(--green);box-shadow:0 0 0 3px rgba(50,164,103,.18)}
+.tag {font:600 11px/1 var(--mono);letter-spacing:.04em;padding:5px 8px;border-radius:2px;background:var(--surface-3);color:var(--muted);border:1px solid var(--border)}
+.app {flex:1;display:grid;grid-template-columns:minmax(320px,1fr) 12px var(--side,360px);padding:12px;min-height:0}
+.splitter {cursor:col-resize;display:flex;justify-content:center;touch-action:none;outline:none}
+.splitter::before {content:"";width:2px;border-radius:1px;background:transparent;transition:background .12s}
+.splitter:hover::before,.splitter:focus-visible::before,.splitter.dragging::before {background:var(--blue-hi)}
+body.resizing {cursor:col-resize;user-select:none}
+@media (max-width:1000px) {.app {grid-template-columns:1fr;gap:12px} .splitter {display:none}}
+.card {background:var(--surface);border:1px solid var(--border);border-radius:3px;display:flex;flex-direction:column;min-width:0}
+.card-head {display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line)}
+.title {font:600 11px/1 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.card-body {padding:12px;display:flex;flex-direction:column;gap:10px}
+.hint {font-size:11px;color:var(--dim)}
+.side {display:flex;flex-direction:column;gap:12px;overflow:auto;min-height:0;padding-right:2px}
+.view-wrap {position:relative;background:#0B0D10;border-bottom:1px solid var(--line)}
+#view {display:block;width:100%;aspect-ratio:960/600;max-height:calc(100vh - 215px);object-fit:contain;cursor:grab;user-select:none;touch-action:none}
+.overlay {position:absolute;left:10px;top:10px;display:flex;gap:6px;pointer-events:none}
+.chip {font:600 11px/1 var(--mono);padding:5px 8px;border-radius:2px;background:rgba(17,20,24,.78);border:1px solid var(--border);color:var(--muted);backdrop-filter:blur(4px)}
+.chip.warn {color:var(--orange);border-color:rgba(236,154,60,.5)}
+.kv {display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:0;margin:0}
+.kv div {padding:9px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.kv dt {font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim)} .kv dd {margin:3px 0 0;font:500 13px var(--mono);color:var(--text)}
+kbd {font:600 10px/1 var(--mono);color:var(--muted);background:var(--surface-3);border:1px solid var(--border);border-bottom-width:2px;border-radius:2px;padding:3px 5px}
+.keys {display:flex;gap:3px}
+.seg {display:flex;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px;gap:2px}
+.seg button {flex:1;background:transparent;border:0;color:var(--muted);font:600 12px var(--sans);padding:7px 0;border-radius:2px;cursor:pointer}
+.seg button:hover:not(:disabled) {color:var(--text);background:var(--surface-2)}
+.seg button.active {background:var(--surface-3);color:#fff}
+.field {display:grid;grid-template-columns:1fr 92px;align-items:center;gap:8px}
+.field label {color:var(--muted);font-size:12px}
+.gains {display:grid;grid-template-columns:repeat(3,1fr) auto;gap:6px;align-items:end}
+.gains label {display:flex;flex-direction:column;gap:4px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim)}
+input[type=number] {width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:2px;padding:6px 8px;font:500 12px var(--mono);outline:none}
+input[type=number]:focus {border-color:var(--blue-hi);box-shadow:0 0 0 2px rgba(76,144,240,.25)}
+input[type=range] {width:100%;margin:2px 0 4px;accent-color:var(--blue-hi);height:14px}
+.btn {background:var(--surface-3);color:var(--text);border:1px solid var(--border);border-radius:2px;padding:8px 10px;font:600 12px var(--sans);cursor:pointer;user-select:none}
+.btn:hover:not(:disabled) {background:#383E47} .btn:disabled {opacity:.4;cursor:default}
+.btn.primary {background:var(--blue);border-color:var(--blue)} .btn.primary:hover:not(:disabled) {background:#215DB0}
+.btn.held {background:var(--blue-hi);border-color:var(--blue-hi);color:#fff}
+.pad {display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.pad .btn {display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;touch-action:none}
+.pad .btn small {font:500 10px var(--sans);color:var(--dim)} .pad .btn.held small {color:#fff}
+.pad .gap {visibility:hidden}
+.status {font:12px var(--mono);color:var(--muted);min-height:18px}
+.status.dim {color:var(--dim)}
+.note {font-size:11px;color:var(--dim);margin:0}
+.divider {height:1px;background:var(--line);margin:2px 0}
+#drive-pad:focus-visible {outline:1px solid var(--blue-hi);outline-offset:-1px}
 </style>
-<h1>Simulation controls</h1>
-<div id="status" role="status">Connecting…</div>
-<section id="drive-pad" tabindex="0" aria-label="Driving controls">
-<h2>Hold to drive · release to stop</h2>
-<p>Hold W/S to drive and A/D to steer while this panel has focus. Combine them for arcs; A/D alone turns in place. Release to brake. Click here after editing a setting.</p>
-<div id="drive-limit"></div>
-<div class="row"><button id="drive-backward" disabled>Hold S · backward</button><button id="drive-forward" disabled>Hold W · forward</button></div>
-<div class="row"><button id="turn-left" disabled>Hold A · turn left</button><button id="turn-right" disabled>Hold D · turn right</button></div>
-<p id="turn-status" role="status"></p>
-<p id="drive-status" role="status">Connecting…</p>
-<div id="drive-speed">Requested 0.00 m/s · estimated 0.00 m/s</div>
-</section>
-<section>
-<h2>Push along X</h2>
-<p>Forward/backward force at the torso. No sideways force.</p>
-<div class="row"><label for="force">Force (N)</label><input id="force" type="number" min="1" max="150" step="1" value="30"></div>
-<input id="force-range" aria-label="Push force" type="range" min="1" max="150" step="1" value="30">
-<div class="row"><label for="duration">Duration (s)</label><input id="duration" type="number" min="0.05" max="2" step="0.05" value="0.25"></div>
-<div class="row"><button id="backward">← Push −X</button><button id="forward">Push +X →</button></div>
-<p id="force-status" role="status">No push</p>
-</section>
-<section>
-<h2>Live robot settings</h2>
-<div id="settings"></div>
-<p>Changes apply immediately. A new robot, including after a fall, loads its own settings.</p>
-</section>
-<button id="new" class="secondary">New random robot</button>
+<header class="topbar">
+  <div class="brand"><span class="mark"></span><span class="crumb">BIZBOT</span><span class="sep">/</span><span>Simulation</span></div>
+  <div class="top-right">
+    <span id="mode-tag" class="tag">—</span>
+    <span class="conn"><span id="dot" class="dot"></span><span id="status" role="status">Connecting…</span></span>
+  </div>
+</header>
+<main class="app">
+  <section class="card" aria-label="Viewport">
+    <div class="card-head"><span class="title">Viewport</span><span class="hint">Drag to orbit · Scroll to zoom</span></div>
+    <div class="view-wrap">
+      <canvas id="view" width="960" height="600" aria-label="MuJoCo view of the robot"></canvas>
+      <div class="overlay"><span id="ctrl-chip" class="chip">—</span><span id="push-chip" class="chip warn" hidden></span></div>
+    </div>
+    <dl id="robot-info" class="kv"></dl>
+    <p id="robot" hidden></p>
+  </section>
+  <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize panels" tabindex="0"></div>
+  <aside id="side" class="side">
+    <section class="card" aria-label="Controller">
+      <div class="card-head"><span class="title">Controller</span><span class="hint">Restarts from still</span></div>
+      <div class="card-body">
+        <div id="modes" class="seg" role="group" aria-label="Controller"></div>
+        <div class="gains">
+          <label>Kp<input id="kp" type="number" min="0" max="1" step="0.001"></label>
+          <label>Ki<input id="ki" type="number" min="0" max="10" step="0.01"></label>
+          <label>Kd<input id="kd" type="number" min="0" max="0.1" step="0.0001"></label>
+          <button id="pid-apply" class="btn primary">Apply</button>
+        </div>
+        <p class="note">These gains apply live to the PID tab; PID Daniel uses his fixed tuner values.</p>
+      </div>
+    </section>
+    <section class="card" id="drive-pad" tabindex="0" aria-label="Driving controls">
+      <div class="card-head"><span class="title">Drive</span><span class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span></div>
+      <div class="card-body">
+        <div class="pad">
+          <span class="gap"></span><button id="drive-forward" class="btn" disabled>W<small>forward</small></button><span class="gap"></span>
+          <button id="turn-left" class="btn" disabled>A<small>left</small></button>
+          <button id="drive-backward" class="btn" disabled>S<small>back</small></button>
+          <button id="turn-right" class="btn" disabled>D<small>right</small></button>
+        </div>
+        <p class="note">Hold to drive, release to brake. A/D alone turns in place.</p>
+        <div id="drive-status" class="status" role="status">Connecting…</div>
+        <div id="drive-speed" class="status dim">Requested 0.00 m/s · estimated 0.00 m/s</div>
+        <div id="turn-status" class="status dim" role="status"></div>
+        <div class="divider"></div>
+        <div id="drive-limit"></div>
+      </div>
+    </section>
+    <section class="card" aria-label="Push">
+      <div class="card-head"><span class="title">Push</span><span class="keys"><kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd></span></div>
+      <div class="card-body">
+        <div class="pad">
+          <span class="gap"></span><button id="push-forward" class="btn">I<small>forward</small></button><span class="gap"></span>
+          <button id="push-left" class="btn">J<small>left</small></button>
+          <button id="push-back" class="btn">K<small>back</small></button>
+          <button id="push-right" class="btn">L<small>right</small></button>
+        </div>
+        <div class="field"><label for="force">Force (N)</label><input id="force" type="number" min="1" max="150" step="1" value="30"></div>
+        <input id="force-range" aria-label="Push force" type="range" min="1" max="150" step="1" value="30">
+        <div class="field"><label for="duration">Duration (s)</label><input id="duration" type="number" min="0.05" max="2" step="0.05" value="0.25"></div>
+        <div id="force-status" class="status" role="status">No push</div>
+        <p class="note">At the torso, relative to where the robot faces.</p>
+      </div>
+    </section>
+    <section class="card" aria-label="Robot settings">
+      <div class="card-head"><span class="title">Robot</span><span class="hint">Applies immediately</span></div>
+      <div class="card-body">
+        <div id="settings"></div>
+        <p class="note">A new robot, including after a fall, loads its own settings.</p>
+        <button id="new" class="btn">New random robot</button>
+      </div>
+    </section>
+  </aside>
+</main>
 <script>
 const $ = id => document.getElementById(id);
-const fields = [['speed_limit','Request limit (m/s)',0,10.00,0.01],['acceleration_limit','Acceleration limit (m/s²)',0.01,50.00,0.01],['turn_limit','Turn-rate limit (°/s)',0,720,0.01],['turn_acceleration','Turn acceleration / braking (°/s²)',1,3600,0.01],['turn_command_limit','Steering command cap (%)',0,100,1],['com','COM forward offset (cm)',-15,15,0.1],['tilt','IMU mounting tilt (°)',-20,20,0.1],['lat','IMU latency (ms)',0,250,1]];
+const fields = [['speed_limit','Request limit (m/s)',0,10.00,0.01],['acceleration_limit','Acceleration limit (m/s²)',0.01,50.00,0.01],['turn_limit','Turn-rate limit (°/s)',0,720,0.01],['turn_acceleration','Turn acceleration (°/s²)',1,3600,0.01],['turn_command_limit','Steering cap (%)',0,100,1],['com','COM forward offset (cm)',-15,15,0.1],['tilt','IMU mounting tilt (°)',-20,20,0.1],['lat','IMU latency (ms)',0,250,1]];
 let online = false;
 let driveEnabled = false;
 let driveSequence = Date.now() * 1000;
@@ -72,10 +174,7 @@ function sendDrive() {
 function clearDrive(notify=true) {
   const held = driveKeys.size > 0;
   driveKeys.clear();
-  $('drive-forward').classList.remove('held');
-  $('drive-backward').classList.remove('held');
-  $('turn-left').classList.remove('held');
-  $('turn-right').classList.remove('held');
+  for (const id of ['drive-forward','drive-backward','turn-left','turn-right']) $(id).classList.remove('held');
   if (held && notify) sendDrive();
 }
 document.addEventListener('keydown', event => {
@@ -106,7 +205,7 @@ for (const [id,key] of [['drive-forward','KeyW'],['drive-backward','KeyS'],['tur
 setInterval(() => { if (driveKeys.size && online && driveEnabled && !document.hidden) sendDrive(); }, 100);
 for (const [name,label,min,max,step] of fields) {
   const block = document.createElement('div');
-  block.innerHTML = `<div class="row"><label for="${name}">${label}</label><input id="${name}" type="number" min="${min}" max="${max}" step="${step}"></div><input id="${name}-range" aria-label="${label}" type="range" min="${min}" max="${max}" step="${step}">`;
+  block.innerHTML = `<div class="field"><label for="${name}">${label}</label><input id="${name}" type="number" min="${min}" max="${max}" step="${step}"></div><input id="${name}-range" aria-label="${label}" type="range" min="${min}" max="${max}" step="${step}">`;
   $(['speed_limit','acceleration_limit','turn_limit','turn_acceleration','turn_command_limit'].includes(name) ? 'drive-limit' : 'settings').append(block);
   let timer;
   const update = (source, target) => {
@@ -124,13 +223,121 @@ for (const [name,label,min,max,step] of fields) {
 }
 $('force').oninput = () => { if ($('force').checkValidity()) $('force-range').value=$('force').value; };
 $('force-range').oninput = () => $('force').value=$('force-range').value;
-function push(sign) {
+const pushKeys = {KeyI:'forward', KeyK:'back', KeyJ:'left', KeyL:'right'};
+function push(direction) {
   if (!$('force').reportValidity() || !$('duration').reportValidity()) return;
-  send({name:'push',force:sign*Number($('force').value),duration:Number($('duration').value)});
+  send({name:'push',force:Number($('force').value),duration:Number($('duration').value),direction});
+  const button = $('push-' + direction);
+  button.classList.add('held'); setTimeout(() => button.classList.remove('held'), 150);
 }
-$('forward').onclick = () => push(1);
-$('backward').onclick = () => push(-1);
+for (const direction of Object.values(pushKeys)) $('push-' + direction).onclick = () => push(direction);
+document.addEventListener('keydown', event => {
+  const direction = pushKeys[event.code];
+  if (!direction || event.repeat || !online || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.target.matches('input,textarea,[contenteditable="true"]')) return;
+  event.preventDefault(); push(direction);
+});
 $('new').onclick = () => { clearDrive(); send({name:'new'}); };
+let shownModes = '';
+function renderModes(modes, mode) {
+  const key = modes.join('|');
+  if (key !== shownModes) {
+    shownModes = key;
+    $('modes').innerHTML = '';
+    for (const m of modes) {
+      const b = document.createElement('button');
+      b.textContent = m; b.dataset.mode = m;
+      b.onclick = () => { if (b.classList.contains('active')) return; clearDrive(); send({name:'mode',value:m}); };
+      $('modes').append(b);
+    }
+  }
+  for (const b of $('modes').children) {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle('active', on); b.setAttribute('aria-pressed', on);
+    b.style.background = on && modeColors[b.dataset.mode] ? modeColors[b.dataset.mode] : '';
+  }
+}
+let modeColors = {};
+function paint(el, color) {   // tinted tag/chip in the controller's colour
+  el.style.color = color || ''; el.style.borderColor = color ? color + '80' : ''; el.style.background = color ? color + '2e' : '';
+}
+const app = document.querySelector('.app');
+const sideWidth = () => $('side').getBoundingClientRect().width;
+function setSide(px) {
+  const w = Math.round(Math.max(280, Math.min(px, window.innerWidth * 0.6)));
+  app.style.setProperty('--side', w + 'px');
+  try { localStorage.setItem('bizbot.side', w); } catch {}
+}
+try { const saved = Number(localStorage.getItem('bizbot.side')); if (saved) setSide(saved); } catch {}
+let split = null;
+$('splitter').addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  split = {x:event.clientX, w:sideWidth()};
+  $('splitter').setPointerCapture(event.pointerId); $('splitter').classList.add('dragging'); document.body.classList.add('resizing');
+  event.preventDefault();
+});
+$('splitter').addEventListener('pointermove', event => { if (split) setSide(split.w - (event.clientX - split.x)); });
+for (const name of ['pointerup','pointercancel']) $('splitter').addEventListener(name, () => {
+  split = null; $('splitter').classList.remove('dragging'); document.body.classList.remove('resizing');
+});
+$('splitter').addEventListener('keydown', event => {
+  const step = event.shiftKey ? 60 : 15;
+  if (event.key === 'ArrowLeft') { event.preventDefault(); setSide(sideWidth() + step); }
+  if (event.key === 'ArrowRight') { event.preventDefault(); setSide(sideWidth() - step); }
+});
+const gainIds = ['kp','ki','kd'];
+let gainsPending = false;
+$('pid-apply').onclick = async () => {
+  if (!gainIds.every(id => $(id).reportValidity())) return;
+  gainsPending = true;
+  await send({name:'pid',kp:Number($('kp').value),ki:Number($('ki').value),kd:Number($('kd').value)});
+  setTimeout(() => { gainsPending = false; }, 300);
+};
+const fmt = (v, d, unit='') => v === null || v === undefined ? '—' : `${Number(v).toFixed(d)}${unit}`;
+function renderInfo(info) {
+  if (!info) return;
+  const rows = [['Mass', fmt(info.mass,1,' kg')], ['COM height', fmt(info.com_height,2,' m')], ['COM offset', fmt(info.com_offset,1,' cm')],
+                ['IMU latency', fmt(info.imu_latency,0,' ms')], ['IMU offset', fmt(info.imu_offset,1,'°')], ['Floor μ', fmt(info.mu,2)],
+                ['Slope', fmt(info.slope,1,'°')], ['Flex', info.flex ? fmt(info.flex,0,' Hz') : 'none'], ['Carpet pull', info.carpet ? fmt(info.carpet,0,' N/m') : 'none']];
+  $('robot-info').innerHTML = rows.map(([k,v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+}
+const view = $('view').getContext('2d');
+let frameSeq = 0;
+async function frameLoop() {   // the server answers as soon as a newer view exists
+  try {
+    const response = await fetch(`/frame?after=${frameSeq}`, {cache:'no-store',signal:AbortSignal.timeout(3000)});
+    if (response.status === 200) {
+      frameSeq = Number(response.headers.get('X-Frame')) || frameSeq;
+      const bitmap = await createImageBitmap(await response.blob());
+      view.drawImage(bitmap, 0, 0);
+      bitmap.close();
+    }
+  } catch { await new Promise(r => setTimeout(r, 250)); }
+  frameLoop();
+}
+frameLoop();
+let drag = null, camMove = {azimuth:0,elevation:0,zoom:0}, camTimer = null;
+const clamp = (x, lim) => Math.max(-lim, Math.min(lim, x));
+function moveCamera(azimuth, elevation, zoom) {
+  camMove.azimuth += azimuth; camMove.elevation += elevation; camMove.zoom += zoom;
+  if (camTimer) return;
+  camTimer = setTimeout(() => {
+    const m = camMove; camMove = {azimuth:0,elevation:0,zoom:0}; camTimer = null;
+    if (online) send({name:'cam',azimuth:clamp(m.azimuth,360),elevation:clamp(m.elevation,180),zoom:clamp(m.zoom,2)});
+  }, 40);
+}
+$('view').addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  drag = {x:event.clientX,y:event.clientY};
+  $('view').setPointerCapture(event.pointerId); $('view').style.cursor = 'grabbing';
+});
+$('view').addEventListener('pointermove', event => {
+  if (!drag) return;
+  moveCamera(-(event.clientX - drag.x) * 0.4, -(event.clientY - drag.y) * 0.3, 0);
+  drag = {x:event.clientX,y:event.clientY};
+});
+for (const name of ['pointerup','pointercancel']) $('view').addEventListener(name, () => { drag = null; $('view').style.cursor = 'grab'; });
+$('view').addEventListener('wheel', event => { event.preventDefault(); moveCamera(0, 0, event.deltaY * 0.002); }, {passive:false});
 async function refresh() {
   try {
     const response = await fetch('/state', {signal:AbortSignal.timeout(1500)});
@@ -138,30 +345,37 @@ async function refresh() {
     const state = await response.json();
     online = true;
     driveEnabled = Boolean(state.drive);
+    $('status').textContent = 'Live'; $('dot').classList.add('on');
+    $('robot').textContent = state.robot || '';
+    modeColors = state.colors || {};
+    const color = modeColors[state.mode];
+    $('mode-tag').textContent = state.mode || '—'; paint($('mode-tag'), color);
+    $('ctrl-chip').textContent = state.name || '—'; paint($('ctrl-chip'), color);
+    if (state.modes) renderModes(state.modes, state.mode);
+    if (state.pid && !gainsPending && !gainIds.includes(document.activeElement?.id)) gainIds.forEach((id, i) => { $(id).value = state.pid[i]; });
+    renderInfo(state.robot_info);
     $('turn-status').textContent = state.turn ? `Turn: requested ${(state.turn.reference*180/Math.PI).toFixed(1)}°/s · estimated ${(state.turn.rate*180/Math.PI).toFixed(1)}°/s` : '';
-    $('status').textContent = 'Connected to MuJoCo';
     for (const [name] of fields) {
       const value = name === 'speed_limit' ? state.drive?.limit : name === 'acceleration_limit' ? state.drive?.acceleration_limit : name === 'turn_limit' ? state.turn?.limit_deg : name === 'turn_acceleration' ? state.turn?.acceleration_deg : name === 'turn_command_limit' ? state.turn?.command_percent : state[name];
       if (value === undefined || pending.has(name) || [$(name),$(name+'-range')].includes(document.activeElement)) continue;
       $(name).value = Number(value.toFixed(2));
       $(name+'-range').value = value;
     }
-    $('force-status').textContent = state.push ? `Applying ${state.push > 0 ? '+' : ''}${state.push.toFixed(0)} N along X` : 'No push';
-    $('drive-status').textContent = state.drive ? `${state.drive.status} · request limit ${state.drive.limit.toFixed(2)} m/s` : 'Driving requires an RL policy';
+    const pushText = state.push_key ? `Pushing ${state.push_key.force.toFixed(0)} N ${state.push_key.direction}`
+      : state.push ? `Random push ${state.push > 0 ? '+' : ''}${state.push.toFixed(0)} N along X` : '';
+    $('force-status').textContent = pushText || 'No push';
+    $('push-chip').hidden = !pushText; $('push-chip').textContent = pushText;
+    $('drive-status').textContent = state.drive ? `${state.drive.status} · limit ${state.drive.limit.toFixed(2)} m/s` : 'Driving requires an RL policy';
     if (state.drive) $('drive-speed').textContent = `Requested ${state.drive.reference.toFixed(2)} m/s · estimated ${state.drive.speed.toFixed(2)} m/s`;
   } catch {
     online = false;
     clearDrive();
-    $('status').textContent = 'Simulation disconnected';
+    $('status').textContent = 'Simulation disconnected'; $('dot').classList.remove('on');
   }
   document.querySelectorAll('button,input').forEach(el => el.disabled=!online);
   $('drive-forward').disabled = $('drive-backward').disabled = !online || !driveEnabled;
   $('turn-left').disabled = $('turn-right').disabled = !online || !driveEnabled;
-  $('speed_limit').disabled = $('speed_limit-range').disabled = !online || !driveEnabled;
-  $('acceleration_limit').disabled = $('acceleration_limit-range').disabled = !online || !driveEnabled;
-  $('turn_limit').disabled = $('turn_limit-range').disabled = !online || !driveEnabled;
-  $('turn_acceleration').disabled = $('turn_acceleration-range').disabled = !online || !driveEnabled;
-  $('turn_command_limit').disabled = $('turn_command_limit-range').disabled = !online || !driveEnabled;
+  for (const n of ['speed_limit','acceleration_limit','turn_limit','turn_acceleration','turn_command_limit']) $(n).disabled = $(n+'-range').disabled = !online || !driveEnabled;
   setTimeout(refresh, 250);
 }
 refresh();

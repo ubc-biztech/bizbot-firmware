@@ -198,6 +198,26 @@ class TurningPlantTests(unittest.TestCase):
         np.testing.assert_allclose(turned.d.qvel, base.d.qvel, atol=1e-8)
         np.testing.assert_array_equal(turned.fb_rpm, base.fb_rpm)
 
+    def test_fitted_motor_and_hall_match_shared_plant(self):
+        from bizbot_mj import fixed
+        rand = fixed(voltage_mode=1, hall_speed=1, cmd_deadzone=1,
+                     cmd_deadband=23, cmd_limit=390, hall_jitter=.02,
+                     motor_mismatch=0, fb_gain_error=0,
+                     push_rate=0, change_rate=0, hand_rate=0)
+        base = Plant(1, rand, .002, np.random.default_rng(42), scale=0)
+        other = Plant(1, rand, .002, np.random.default_rng(42), scale=0)
+        turned = TurningPlant.from_plant(other, 500)
+        for plant in (base, turned):
+            plant.reset(np.array([0]), np.zeros(1), np.zeros(1), np.zeros(1))
+        for command in (10, 100, 500, -100, -500, 0):
+            for _ in range(20):
+                base.advance(np.array([float(command)]), 1)
+                turned.advance(np.array([float(command)]), 1)
+                np.testing.assert_allclose(turned.d.ctrl, base.d.ctrl, atol=1e-7)
+                np.testing.assert_allclose(turned.d.qvel, base.d.qvel, atol=1e-7)
+                np.testing.assert_allclose(turned.hall_est, base.hall_est, atol=1e-7)
+                np.testing.assert_array_equal(turned.fb_rpm, base.fb_rpm)
+
     def test_differential_feedback_and_reset(self):
         plant = self.plant()
         plant.turn_command[0] = 30

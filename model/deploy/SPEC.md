@@ -1,6 +1,6 @@
 # BizBot balance policy: contract
 
-Source: `/Users/liuis/projects/ubc-biztech/bizbot-firmware/model/mj/runs/best_deployable.pt`. Network: 162 inputs -> 128 ELU -> 128 ELU -> 1 tanh,
+Source: `model/mj/runs/ft_merged/ckpt_0040M.pt`. Network: 162 inputs -> 128 ELU -> 128 ELU -> 1 tanh,
 37505 parameters, about 37248 multiply-adds per tick.
 
 ## Call pattern

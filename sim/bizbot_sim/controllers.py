@@ -74,6 +74,52 @@ def firmware_pid(n, kp=0.04, ki=0.0, kd=0.001, cap=0.20, alpha=0.3, trim_deg=0.0
     return ctrl
 
 
+def daniel_pid(n, kp_front=0.06, kp_back=0.064, ki=0.0, kd=0.0015, boost=1.0, width=0.8, cap=0.55, alpha=0.30,
+               vkp=0.09, vsign=-1.0, tau=0.1, wheel_mm=162.0, acc_filter_s=0.10, max_lean=3.0):
+    """origin/daniel-updates (src/control/PID.cpp, VelocityEstimator.h, VelocityControl.h, main.cpp) with the
+    tuner values Daniel runs (2026-10-30). Defaults: MAX_BALANCE_OUTPUT 0.55, IMU_RATE_LPF_ALPHA 0.30.
+
+    Velocity loop (vki 0): the fused velocity, wheel rpm continuously corrected toward by integrated
+    gravity-compensated forward acceleration (time constant tau), sets the target pitch, capped at
+    MAX_VEL_LEAN_DEG. Pitch loop: P front/back by the side of the target, plus kp * boost * tanh(error / width)
+    near the target; D on the filtered pitch rate. SET_ACCEL is left at its default 0.
+    """
+    s = {"integ": np.zeros(n), "rate": np.zeros(n), "prev": None, "count": None, "since": np.zeros(n),
+         "acc": np.zeros(n), "v": None}
+    rpm_per_mps = 60000.0 / (np.pi * wheel_mm)
+
+    def ctrl(m):
+        if s["prev"] is None:
+            s["prev"], s["count"] = m["pitch_deg"].copy(), m["imu_count"].copy()
+        s["since"] += CONTROL_DT
+        new = m["imu_count"] != s["count"]
+        raw = (m["pitch_deg"] - s["prev"]) / np.maximum(s["since"], CONTROL_DT)
+        s["rate"] = np.where(new, s["rate"] + alpha * (raw - s["rate"]), s["rate"])
+        th = np.radians(m["pitch_deg"])   # Imu.cpp: gravity removed with the IMU's own pitch, then low-passed
+        horiz = (m["accel_fwd"] + G * np.sin(th)) / np.cos(th)
+        a = s["since"] / (acc_filter_s + s["since"])
+        s["acc"] = np.where(new, s["acc"] + a * (horiz - s["acc"]), s["acc"])
+        s["prev"] = np.where(new, m["pitch_deg"], s["prev"])
+        s["since"] = np.where(new, 0.0, s["since"])
+        s["count"] = m["imu_count"].copy()
+        wheel = 0.5 * (m["rpm_left"] + m["rpm_right"])
+        if s["v"] is None or tau <= 0:
+            s["v"] = np.asarray(wheel, float).copy()
+        else:
+            d = np.exp(-CONTROL_DT / tau)
+            s["v"] = wheel + (s["v"] - wheel) * d + s["acc"] * rpm_per_mps * tau * (1 - d)
+        target = np.clip(vsign * vkp * (0.0 - s["v"]), -max_lean, max_lean) if vkp else 0.0
+        err = target - m["pitch_deg"]
+        s["integ"] = s["integ"] + err * CONTROL_DT
+        if ki:
+            s["integ"] = np.clip(s["integ"], -cap / ki, cap / ki)
+        kp = np.where(err < 0, kp_front, kp_back)
+        out = np.clip(kp * (err + boost * np.tanh(err / width)) + ki * s["integ"] - kd * s["rate"], -cap, cap)
+        return -out  # BALANCE_MOTOR_SIGN, as firmware_pid
+
+    return ctrl
+
+
 # --- LQR -------------------------------------------------------------------------
 
 def _expm(a):

@@ -125,6 +125,20 @@ class Randomization:
     push_force_max: U = U(20.0, 200.0, 80.0)        # N
     change_rate: U = U(0.0, 0.2, 0.05)              # sudden slope, floor or payload changes per second
 
+    # --- seen on the real robot (2026-10-23 logs); all off at nominal ---
+    cmd_deadzone: P = P(0.0)                        # the deadband is also taken off larger commands (dead zone), not a hard cut
+    hall_speed: P = P(0.0)                          # the hoverboard speed estimate only changes at hall edges (stale when slow)
+    hall_edges: U = U(45.0, 135.0, 90.0)            # hall edges per wheel turn
+    hall_timeout: U = U(0.05, 0.3, 0.15)            # s without an edge before the estimate reads 0
+    hand_rate: U = U(0.0, 0.0, 0.0)                 # times per second someone holds, tilts or lifts the robot
+    hand_lift_share: U = U(0.0, 1.0, 0.5)           # share of those that lift the wheels off the floor
+    floor_spring_on: P = P(0.0)                     # a carpet-like pull back toward a resting spot that follows the robot
+    floor_spring: U = U(0.0, 0.0, 0.0)              # N/m of that pull
+    floor_spring_tau: U = U(10.0, 10.0, 10.0)       # s for the resting spot to catch up with the robot
+    voltage_mode: P = P(0.0)                        # EFeru voltage mode: command sets motor voltage (no speed loop)
+    cmd_limit: U = U(1000.0, 1000.0, 1000.0)       # largest command magnitude the hoverboard acts on (real: about 380)
+    hall_jitter: U = U(0.0, 0.0, 0.0)               # relative error of each hall-edge speed estimate (uneven edge spacing)
+
 
 def sample(rand, rng, n, scale):
     """Draw n robots: {field name: array}."""

@@ -47,6 +47,22 @@ class EnvConfig:
     l1_rate_scale: float = 2.0       # rad/s at which the l1 pitch-rate penalty is full
     l1_hold: float = 0.0             # weight on the leaky wheel-rotation integral (distance crept)
     l1_hold_scale: float = 1.0       # wheel revolutions at which that penalty is full
+    l1_spin: float = 0.0             # weight on wheel spin that does not move the robot (slipping, held, lifted)
+    l1_spin_scale: float = 1.0       # m/s of that spin at which the penalty is full
+    l1_pos: float = 0.0              # weight on the true distance from where the episode started (drift)
+    l1_pos_scale: float = 0.5        # m at which that penalty is full
+    # Stillness when calm (no push, hand hold or sudden change for still_after_s, and lean_slow_s into the episode):
+    l1_lean: float = 0.0             # weight on slow lean: |true pitch low-passed over lean_fast_s - low-passed over lean_slow_s|
+    l1_lean_scale: float = 0.0175    # rad at which that penalty is full (1 deg)
+    lean_fast_s: float = 0.5         # s; removes the fast wobble
+    lean_slow_s: float = 10.0        # s; follows the robot's own balance angle (trim, payload, slope)
+    l1_sway: float = 0.0             # weight on slow back-and-forth: |position - position low-passed over lean_slow_s|
+    l1_sway_scale: float = 0.1       # m at which that penalty is full
+    still_after_s: float = 5.0       # s since the last push, hand hold or sudden change before those two count
+    gentle_start_frac: float = 0.0   # share of episodes that start near upright and still (initial ranges x 0.1)
+    push_shape: bool = False         # random pushes rise and fall over their length, with a hand shake on top
+    dz_comp: float = 0.0             # firmware DZ_COMP: added to every nonzero command sent (the policy's history keeps the command without it)
+    l1_normalize: bool = False       # divide the l1 penalties by their total weight when it exceeds 1, so a step never earns below 0
     w_vel: float = 1.0
     v_scale: float = 0.3             # m/s
     w_rate: float = 0.05             # per (rad/s)^2
@@ -72,15 +88,22 @@ class BalanceEnv:
         n = cfg.n_envs
         self.substeps = int(round(cfg.policy_dt / cfg.physics_dt))
         self.plant = Plant(n, rand, cfg.physics_dt, self.rng, scale)
+        self.plant.push_shape = cfg.push_shape
         self.obs_size = self.FRAME * cfg.history + 2
         self.priv_size = 10 + len(PRIV_PARAMS)
         self.hist = np.zeros((n, cfg.history, self.FRAME), dtype=np.float32)
         self.u = np.zeros(n)
         self.integral = np.zeros(n)
+        self.lean_fast = np.zeros(n)
+        self.lean_slow = np.zeros(n)
+        self.x_anchor = np.zeros(n)
+        self.last_event_t = np.zeros(n)
+        self._change_next = np.zeros(n)
         self.ep_return = np.zeros(n)
         self.ep_len = np.zeros(n, dtype=np.int64)
         self._lo = np.array([getattr(rand, k).lo if hasattr(getattr(rand, k), "lo") else 0.0 for k in PRIV_PARAMS])
         self._hi = np.array([getattr(rand, k).hi if hasattr(getattr(rand, k), "hi") else 1.0 for k in PRIV_PARAMS])
+        self.x0 = np.zeros(n)
         self._reset(np.arange(n))
 
     @property
@@ -101,7 +124,10 @@ class BalanceEnv:
         a = np.clip(np.asarray(action, dtype=float).reshape(-1), -1.0, 1.0)
         u_prev = self.u
         self.u = u_prev + np.clip(a - u_prev, -c.action_rate_limit, c.action_rate_limit)
-        pl.advance(np.trunc(self.u * c.max_cmd), self.substeps)  # normalizedToHoverboard
+        cmd = np.trunc(self.u * c.max_cmd)  # normalizedToHoverboard
+        if c.dz_comp:
+            cmd = np.clip(cmd + c.dz_comp * np.sign(cmd), -c.max_cmd, c.max_cmd)
+        pl.advance(cmd, self.substeps)
 
         rpm = self._wheel_rpm()
         self.integral = np.clip(self.integral * np.exp(-c.policy_dt / c.integral_leak_s)
@@ -113,6 +139,17 @@ class BalanceEnv:
         terminated = np.abs(truth["pitch"]) > np.radians(c.max_tilt_deg)
         terminated |= ~np.isfinite(truth["pitch"])
         truncated = ~terminated & (pl.t >= c.episode_s - 1e-9)
+        still_terms = 0.0
+        if c.l1_lean or c.l1_sway:
+            self.lean_fast += c.policy_dt / c.lean_fast_s * (truth["pitch"] - self.lean_fast)
+            self.lean_slow += c.policy_dt / c.lean_slow_s * (truth["pitch"] - self.lean_slow)
+            self.x_anchor += c.policy_dt / c.lean_slow_s * (truth["position"] - self.x_anchor)
+            event = (pl.t < pl.push_until) | (pl.t < pl.hand_until) | (pl.change_next != self._change_next)
+            self._change_next = pl.change_next.copy()
+            self.last_event_t = np.where(event, pl.t, self.last_event_t)
+            calm = (pl.t - self.last_event_t >= c.still_after_s) & (pl.t >= c.lean_slow_s)
+            still_terms = np.where(calm, c.l1_lean * np.minimum(np.abs(self.lean_fast - self.lean_slow) / c.l1_lean_scale, 1.0)
+                                   + c.l1_sway * np.minimum(np.abs(truth["position"] - self.x_anchor) / c.l1_sway_scale, 1.0), 0.0)
         pen = (c.w_vel * (truth["speed"] / c.v_scale) ** 2 + c.w_rate * truth["pitch_rate"] ** 2
                + c.w_dcmd * (self.u - u_prev) ** 2 + c.w_cmd * self.u ** 2)
         if c.reward_form == "capped":
@@ -122,10 +159,14 @@ class BalanceEnv:
         elif c.reward_form == "alive":
             reward = 1.0 - c.shape_weight * (1.0 - np.exp(-pen))
         elif c.reward_form == "l1":
+            l1_norm = max(1.0, c.l1_vel + c.l1_rate + c.l1_dcmd + c.l1_hold + c.l1_spin + c.l1_pos + c.l1_lean + c.l1_sway) if c.l1_normalize else 1.0
             reward = 1.0 - (c.l1_vel * np.minimum(np.abs(truth["speed"]) / c.l1_v_scale, 1.0)
                             + c.l1_rate * np.minimum(np.abs(truth["pitch_rate"]) / c.l1_rate_scale, 1.0)
                             + c.l1_dcmd * np.minimum(np.abs(self.u - u_prev) / 0.25, 1.0)
-                            + c.l1_hold * np.minimum(np.abs(self.integral) / c.l1_hold_scale, 1.0))
+                            + c.l1_hold * np.minimum(np.abs(self.integral) / c.l1_hold_scale, 1.0)
+                            + c.l1_spin * np.minimum(np.abs(truth["slip"]) / c.l1_spin_scale, 1.0)
+                            + c.l1_pos * np.minimum(np.abs(truth["position"] - self.x0) / c.l1_pos_scale, 1.0)
+                            + still_terms) / l1_norm
         else:
             reward = 1.0 - pen
         reward = np.where(terminated, -c.fall_penalty, reward)
@@ -150,14 +191,22 @@ class BalanceEnv:
 
     def _reset(self, idx):
         c, rng, m = self.cfg, self.rng, len(idx)
+        g = np.where(rng.random(m) < c.gentle_start_frac, 0.1, 1.0) if c.gentle_start_frac > 0 else 1.0
         self.plant.reset(idx,
-                         pitch=np.radians(rng.uniform(-1, 1, m) * c.init_pitch_deg),
-                         rate=np.radians(rng.uniform(-1, 1, m) * c.init_rate_dps),
-                         speed=rng.uniform(-1, 1, m) * c.init_speed)
+                         pitch=np.radians(rng.uniform(-1, 1, m) * c.init_pitch_deg * g),
+                         rate=np.radians(rng.uniform(-1, 1, m) * c.init_rate_dps * g),
+                         speed=rng.uniform(-1, 1, m) * c.init_speed * g)
         self.u[idx] = 0.0
         self.integral[idx] = 0.0
         self.ep_return[idx] = 0.0
         self.ep_len[idx] = 0
+        self.x0[idx] = self.plant.qpos[idx, 0]
+        if c.l1_lean or c.l1_sway:
+            tr = self.plant.truth()
+            self.lean_fast[idx] = self.lean_slow[idx] = tr["pitch"][idx]
+            self.x_anchor[idx] = tr["position"][idx]
+            self.last_event_t[idx] = 0.0
+            self._change_next[idx] = self.plant.change_next[idx]
         self.hist[idx] = self._frame(idx)[:, None, :]
         self.last_priv = self._priv(self.plant.truth())
 

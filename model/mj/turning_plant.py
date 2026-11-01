@@ -48,7 +48,10 @@ class TurningPlant(Plant):
         due = np.nonzero(self.t >= self.eferu_next)[0]
         if due.size:
             c_in = self.hist_cmd[(ptr - p["cmd_delay"][due]) % H, due]
-            c_in = np.where(np.abs(c_in) <= p["cmd_deadband"][due], 0.0, c_in)
+            c_in = np.clip(c_in, -p["cmd_limit"][due], p["cmd_limit"][due])
+            db = p["cmd_deadband"][due]
+            c_in = np.where(p["cmd_deadzone"][due], np.sign(c_in) * np.maximum(np.abs(c_in) - db, 0.0),
+                            np.where(np.abs(c_in) <= db, 0.0, c_in))
             lim = p["rate"][due]
             self.u_rl[due] += np.clip(c_in - self.u_rl[due], -lim, lim)
             self.u_f[due] += p["cmd_lowpass"][due] * (self.u_rl[due] - self.u_f[due])
@@ -64,9 +67,10 @@ class TurningPlant(Plant):
         room = np.maximum(0.0, self.command_limit - np.abs(self.u_f))
         differential = np.clip(self.turn_f, -room, room)
         wheel_commands = np.stack([self.u_f - differential, self.u_f + differential])
-        target = np.clip(wheel_commands / EFERU_FULL_SCALE, -1.0, 1.0) * p["spd_full"]
+        frac = np.clip(wheel_commands / EFERU_FULL_SCALE, -1.0, 1.0)
         k, R, imax = p["k_m"], p["r_m"], p["imax_m"]
-        kp, ki = p["speed_kp"], p["spd_ki"]
+        target = np.where(p["voltage_mode"], frac * self.v_batt / k, frac * p["spd_full"])
+        kp, ki = p["kp_m"], p["spd_ki"]
         self.spd_int += (target - w) * dt
         wind = imax / np.maximum(ki, 1e-9)
         np.clip(self.spd_int, -wind, wind, out=self.spd_int)
@@ -93,6 +97,23 @@ class TurningPlant(Plant):
             xf[self.b_up, 4] = F * arm * (1 - 2*(qx*qx + qy*qy))
             xf[self.b_up, 5] = -F * arm * 2*(qy*qz - qw*qx)
             self.push_F = np.where(pushing, self.push_F, 0.0)
+        # Hand events: someone holds the frame where it is at a chosen tilt, and
+        # sometimes lifts it so the wheels spin in the air.
+        holding = self.t < self.hand_until
+        if holding.any() or self._hand_was.any():
+            mt = 2.0 * p["w_load"] / G
+            mgl = p["body_mass"] * G * p["com_height"]
+            q = self.qpos
+            fx = -400.0 * mt * (q[:, 0] - self.hand_x0) - 28.0 * mt * qv[:, 0]
+            z_to = np.where(self.t < self.hand_until - 0.3, self.hand_z0, self.hand_zg)   # set down over the last 0.3 s
+            fz = self.hand_lifted * (mt * G - 400.0 * mt * (q[:, 2] - z_to) - 28.0 * mt * qv[:, 2])
+            th_to = np.where(self.t < self.hand_until - 0.3, self.hand_th0, 0.0)          # upright when set down
+            ty = -3.0 * mgl * (th - th_to) - 0.3 * mgl * qv[:, 4]
+            xf = d.xfrc_applied
+            xf[self.b_base, 0] = np.where(holding, fx, 0.0)
+            xf[self.b_base, 2] = np.where(holding, fz, 0.0)
+            xf[self.b_base, 4] = np.where(holding, ty, 0.0)
+            self._hand_was = holding
         w_abs_l = w[0] + qv[:, 4]
         w_abs_r = w[1] + qv[:, 4]
         rr = p["rolling_resistance"] * p["w_load"] * p["wheel_radius"]
@@ -125,12 +146,28 @@ class TurningPlant(Plant):
         acc_imu = np.where(p["imu_up"] > 0, sd[:, 1, 0], sd[:, 0, 0])
         self.hist_pitch[ptr] = self.imu_lp + self.imu_err
         self.hist_accel[ptr] = acc_imu
-        wm = 0.5 * (qv[:, 7] + qv[:, 8]) * RPM_PER_RAD_S
+        wrel = 0.5 * (qv[:, 7] + qv[:, 8])
+        # Hall-edge speed estimate: it only changes when the rotor crosses one of
+        # hall_edges positions per turn (so it goes stale when slow), and reads 0
+        # after hall_timeout without an edge.
+        now = self.t + dt
+        self.hall_pos += wrel * dt
+        step = 2.0 * np.pi / p["hall_edges"]
+        edge = np.floor(self.hall_pos / step) != np.floor(self.hall_last_pos / step)
+        if edge.any():
+            el = np.maximum(now - self.hall_last_t, dt)
+            jit = 1.0 + p["hall_jitter"] * rng.standard_normal(self.n) if (p["hall_jitter"] > 0).any() else 1.0
+            self.hall_est = np.where(edge, (self.hall_pos - self.hall_last_pos) / el * jit, self.hall_est)
+            self.hall_last_pos = np.where(edge, self.hall_pos, self.hall_last_pos)
+            self.hall_last_t = np.where(edge, now, self.hall_last_t)
+        self.hall_est = np.where(now - self.hall_last_t > p["hall_timeout"], 0.0, self.hall_est)
+        wm = np.where(p["hall_speed"], self.hall_est, wrel) * RPM_PER_RAD_S
         self.rpm_lag += dt / p["fb_lag"] * (wm - self.rpm_lag)
         self.hist_rpm[ptr] = self.rpm_lag
         turn_rpm = .5 * (qv[:, 8] - qv[:, 7]) * RPM_PER_RAD_S
         self.turn_rpm_lag += dt / p["fb_lag"] * (turn_rpm - self.turn_rpm_lag)
         self.hist_turn_rpm[ptr] = self.turn_rpm_lag
+        self._update_wheel_hall()
         self.t += dt
 
         # IMU packets: pitch in 0.01 deg, acceleration in 1 mg.
@@ -156,6 +193,9 @@ class TurningPlant(Plant):
             common_rpm = self.hist_rpm[rows, due]
             differential_rpm = self.hist_turn_rpm[rows, due]
             rpm = np.stack([common_rpm - differential_rpm, common_rpm + differential_rpm]) * p["fb_gain"][:, due]
+            rows = (ptr - p["fb_delay"][due]) % H
+            wheel_rpm = self.hist_wheel_rpm[rows, due].T * p["fb_gain"][:, due]
+            rpm = np.where(p["hall_speed"][due], wheel_rpm, rpm)
             rpm[np.abs(rpm) < p["fb_min_rpm"][due]] = 0.0
             self.fb_rpm[:, due] = np.round(rpm)
             self.batt_meas[due] = np.round(self.batt_lp[due] * 100.0) / 100.0
@@ -170,6 +210,19 @@ class TurningPlant(Plant):
             self.push_until[due] = self.t[due] + rng.uniform(0.05, 0.4, k_)
             self.push_h[due] = rng.uniform(0.3, 1.2, k_) * p["L_push"][due]
             self.push_next[due] = self.t[due] + self._exp(p["push_rate"][due])
+
+        # Hand events start: hold here at a tilt of up to 15 deg for 0.5-3 s, lifted (and set
+        # back down at the end) or not.
+        due = np.nonzero(self.t >= self.hand_next)[0]
+        if due.size:
+            k_ = due.size
+            self.hand_until[due] = self.t[due] + rng.uniform(0.5, 3.0, k_)
+            self.hand_lifted[due] = (rng.random(k_) < p["hand_lift_share"][due]).astype(float)
+            self.hand_x0[due] = self.qpos[due, 0]
+            self.hand_zg[due] = self.qpos[due, 2]
+            self.hand_z0[due] = self.qpos[due, 2] + self.hand_lifted[due] * rng.uniform(0.03, 0.15, k_)
+            self.hand_th0[due] = np.radians(rng.uniform(-15.0, 15.0, k_))
+            self.hand_next[due] = self.hand_until[due] + self._exp(p["hand_rate"][due])
 
         # Sudden changes: new slope (about the contact point), floor patch, or payload.
         due = np.nonzero(self.t >= self.change_next)[0]

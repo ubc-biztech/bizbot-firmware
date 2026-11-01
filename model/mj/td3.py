@@ -13,7 +13,7 @@ import csv
 import json
 import sys
 import time
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -66,6 +66,7 @@ class TD3Config:
     device: str = "mps"
     seed: int = 0
     env_overrides: dict = field(default_factory=dict)
+    rand_overrides: dict = field(default_factory=dict)  # Randomization to replace: {name: [lo, hi, nominal(, log)] or {"p": prob}}
 
 
 PRIV_STATE = 10   # leading true-state entries of BalanceEnv._priv; the rest are the robot's parameters
@@ -121,6 +122,9 @@ def train(c, out):
     rng = np.random.default_rng(c.seed)
     torch.set_num_threads(c.threads)
     env_cfg, rand = make_env_cfg(c)
+    if c.rand_overrides:
+        from bizbot_mj import P, U
+        rand = replace(rand, **{k: P(v["p"]) if isinstance(v, dict) else U(*v) for k, v in c.rand_overrides.items()})
     (out / "config.json").write_text(json.dumps({"td3": asdict(c), "env": asdict(env_cfg)}, indent=1))
     venv = VecEnv(env_cfg, rand, c.workers, seed=c.seed, scale=c.scale, env_kind=c.env)
     N, od, pd = venv.n, venv.obs_size, venv.priv_size
