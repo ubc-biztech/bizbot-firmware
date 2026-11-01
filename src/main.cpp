@@ -9,7 +9,9 @@
  */
 
 #include <Arduino.h>
+#include <string.h>
 #include <WiFi.h>
+#include <lwip/sockets.h>
 
 #include "comms/CommandParser.h"
 #include "hal/ServoControl.h"
@@ -21,6 +23,7 @@
 #include "hal/Imu.h"
 #include "hal/OffsetStorage.h"
 #include "robot/RobotState.h"
+#include "control/bizbot_policy.h"
 
 HardwareSerial& HoverSerial = Serial2;
 HardwareSerial& DebugSerial = Serial;
@@ -67,7 +70,22 @@ bool wasEnabled = false;
 bool wifiControlReady = false;
 bool wifiControlWasConnected = false;
 
+// RL policy (O 120M) drives instead of the PID. The PID still runs and its command is logged.
+// Policy runs every 2nd 5 ms tick (its 10 ms period); DZ_COMP 20 is added to every nonzero
+// command, as in training. One line per policy run, never blocking:
+//   RL <ms> <pitch_deg> <accel_fwd> <wheel_rpm> <battery_v> <pid_cmd> <rl_cmd> <us>
+constexpr float RL_DRIVE_SIGN = -BALANCE_MOTOR_SIGN;
+constexpr int16_t RL_DZ_COMP = 20;
+BizbotPolicyState rlState;
+int rlTickPhase = 0;
+int16_t rlAppliedCmd = 0;
+int16_t rlCmdHeld = 0;
+
 void onEnabled() {
+    bizbot_policy_reset(&rlState);
+    rlTickPhase = 0;
+    rlAppliedCmd = 0;
+    rlCmdHeld = 0;
     balanceController.reset();
     robotState.velIntegral = 0.0f;
     robotState.targetPitchDeg = 0.0f;
@@ -361,7 +379,39 @@ void runControlLoop(float dtSeconds) {
     const int16_t speed = normalizedToHoverboard(correctedSpeed);
     const int16_t steer = normalizedToHoverboard(output.steer);
 
-    Send(steer, speed);
+    if (++rlTickPhase >= 2) {
+        rlTickPhase = 0;
+        const float accelFwd = IMU_FORWARD_ACCEL_SIGN * robotState.rawAccelY;
+        const float battery = robotState.batteryVoltage > 1.0f ? robotState.batteryVoltage : 37.0f;
+        const float wheelFwd = RL_DRIVE_SIGN * robotState.wheelVelocity;
+        if (!rlState.fresh) {
+            rlState.u = RL_DRIVE_SIGN * rlAppliedCmd / static_cast<float>(MAX_HOVERBOARD_COMMAND);
+        }
+        const uint32_t t0 = micros();
+        // One call: Arduino's constrain() is a macro that would evaluate (and step) the policy up to 3 times.
+        const int16_t rlCmd = static_cast<int16_t>(RL_DRIVE_SIGN * bizbot_policy_tick(
+            &rlState, robotState.pitchDeg, accelFwd, wheelFwd, battery));
+        rlCmdHeld = constrain(rlCmd, -MAX_HOVERBOARD_COMMAND, MAX_HOVERBOARD_COMMAND);
+        const uint32_t us = micros() - t0;
+        char line[112];
+        const int n = snprintf(line, sizeof(line), "RL %lu %.2f %.3f %.1f %.2f %d %d %lu\n",
+            static_cast<unsigned long>(millis()), robotState.pitchDeg, accelFwd, wheelFwd,
+            battery, speed, rlCmdHeld, static_cast<unsigned long>(us));
+        if (n > 0 && n < static_cast<int>(sizeof(line))) {
+            if (wifiControlClient && wifiControlClient.connected()) {
+                send(wifiControlClient.fd(), line, n, MSG_DONTWAIT);
+            } else if (DebugSerial.availableForWrite() >= n) {
+                DebugSerial.write(reinterpret_cast<const uint8_t*>(line), n);
+            }
+        }
+    }
+    rlAppliedCmd = rlCmdHeld;
+    int16_t rlOut = rlCmdHeld;
+    if (rlOut != 0) {
+        rlOut = constrain(rlOut + (rlOut > 0 ? RL_DZ_COMP : -RL_DZ_COMP),
+                          -MAX_HOVERBOARD_COMMAND, MAX_HOVERBOARD_COMMAND);
+    }
+    Send(steer, rlOut);
 
 #if PID_DEBUG
     static uint32_t lastPidDebugMs = 0;
