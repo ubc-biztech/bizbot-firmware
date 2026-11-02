@@ -1,4 +1,6 @@
-# Rules for Claude in this repo
+# Rules for AI assistants in this repo (Claude, Codex)
+
+`AGENTS.md` is a link to this file; edit only this one.
 
 ## Scope: do exactly what was asked, nothing else
 
@@ -31,3 +33,9 @@
   rather than simulating hardware.
 - `tuner/` drives the robot by spawning `tools/keyboard_controls.py`.
   Python must be started with `-u` or its output is block-buffered.
+- Never put a call with side effects, or an expensive one, inside
+  `constrain`, `min`, `max`, `abs` or any other Arduino macro: they paste the
+  argument in up to three times. Store the result first, then clamp it.
+  (2026-11-01: `constrain(bizbot_policy_tick(...), ...)` ran the RL policy
+  3x per tick, stepping its history, integral and rate limit 3x and taking
+  7.3 ms instead of 2.4 ms; the robot death-wobbled until it was split.)

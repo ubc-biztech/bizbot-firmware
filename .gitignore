@@ -19,3 +19,8 @@ model/mj/runs/
 MUJOCO_LOG.TXT
 # Host test binary built by model/mj/export_policy.py
 model/deploy/test_policy
+
+# macOS
+.DS_Store
+.venv-servo/
+.vscode/
