@@ -18,8 +18,14 @@ The hoverboard command filter, the IMU and the wheel feedback are delays and
 filters on ring buffers at physics resolution, as in sim/bizbot_sim.
 """
 
+import sys
+
 import mujoco
 import numpy as np
+
+# MuJoCo writes its warnings (e.g. an unstable simulation) to MUJOCO_LOG.TXT in the working
+# directory by default. Send them to stderr instead so no log file appears.
+mujoco.set_mju_user_warning(lambda msg: print(f"MuJoCo warning: {msg}", file=sys.stderr))
 
 from .params import sample
 
