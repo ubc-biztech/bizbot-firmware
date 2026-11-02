@@ -148,10 +148,9 @@ bizbot-firmware/
 ├── sim/
 │   └── index.html
 │
-├── tuner/
-│
 ├── tools/
-│   └── keyboard_control.py
+│   ├── keyboard_control.py
+│   └── tuner/
 │
 └── README.md
 ```

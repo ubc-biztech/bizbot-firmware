@@ -68,4 +68,4 @@ and power delivery must be checked on the actual servos.
 
 ## Standalone sweep firmware
 
-See [the independent servo-sweep project](../standalone/servo-sweep/README.md).
+See [the independent servo-sweep project](../firmware/servo-sweep/README.md).
