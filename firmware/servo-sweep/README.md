@@ -18,8 +18,8 @@ Keep mechanisms clear: motion begins automatically after flashing or resetting.
 From the repository root:
 
 ```sh
-~/.platformio/penv/bin/pio run -d standalone/servo-sweep
-~/.platformio/penv/bin/pio run -d standalone/servo-sweep -t upload --upload-port /dev/cu.usbserial-10
+~/.platformio/penv/bin/pio run -d firmware/servo-sweep
+~/.platformio/penv/bin/pio run -d firmware/servo-sweep -t upload --upload-port /dev/cu.usbserial-10
 ```
 
-To restore BizBot, upload the root project's esp32dev environment.
+To restore BizBot, upload the firmware/ project's esp32dev environment.
