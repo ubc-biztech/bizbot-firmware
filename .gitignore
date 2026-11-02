@@ -24,3 +24,9 @@ model/deploy/test_policy
 .venv-servo/
 .vscode/
 CLAUDE.md
+
+# KiCad autosaves, locks, caches and backups
+*-backups/
+*.lck
+\#auto_saved_files\#
+fp-info-cache

@@ -1,4 +1,0 @@
-numpy>=2.0
-torch>=2.14
-stable-baselines3>=2.9
-tqdm>=4.66

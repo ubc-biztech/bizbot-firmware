@@ -146,7 +146,8 @@ bizbot-firmware/
 │           └── RobotState.cpp
 │
 ├── sim/
-│   └── index.html
+│   ├── bizbot_mj/
+│   └── bizbot_sim/
 │
 ├── tools/
 │   ├── keyboard_control.py
