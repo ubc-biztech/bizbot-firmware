@@ -12,7 +12,7 @@ class TurningPlant(Plant):
         result = cls.__new__(cls)
         result.__dict__ = plant.__dict__.copy()
         result.command_limit = command_limit
-        for name in ('turn_command', 'turn_rl', 'turn_f', 'turn_rpm_lag'):
+        for name in ('turn_command', 'drive_command', 'turn_rl', 'turn_f', 'turn_rpm_lag'):
             setattr(result, name, np.zeros(plant.n))
         result.hist_turn_cmd = np.zeros((plant.H, plant.n))
         result.hist_turn_rpm = np.zeros((plant.H, plant.n))
@@ -20,7 +20,7 @@ class TurningPlant(Plant):
 
     def reset(self, idx, pitch, rate, speed):
         super().reset(idx, pitch, rate, speed)
-        for name in ('turn_command', 'turn_rl', 'turn_f', 'turn_rpm_lag'):
+        for name in ('turn_command', 'drive_command', 'turn_rl', 'turn_f', 'turn_rpm_lag'):
             getattr(self, name)[idx] = 0.0
         self.hist_turn_cmd[:, idx] = 0.0
         self.hist_turn_rpm[:, idx] = 0.0
@@ -41,6 +41,8 @@ class TurningPlant(Plant):
 
     def _substep(self, cmd):
         p, dt, H, rng, ptr, m, d = self.p, self.dt, self.H, self.rng, self.ptr, self.m, self.d
+        # W/S push: added after the policy, so its own command history never contains it.
+        cmd = np.clip(cmd + self.drive_command, -self.command_limit, self.command_limit)
         self.hist_cmd[ptr] = cmd
         self.hist_turn_cmd[ptr] = self.turn_command
 

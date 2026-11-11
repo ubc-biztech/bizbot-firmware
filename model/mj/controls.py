@@ -136,6 +136,10 @@ class ControlPanel:
             if type(data['value']) is not str or not MODE_NAME.fullmatch(data['value']):
                 raise ValueError('Invalid mode')
             return f"mode {data['value']}"
+        if name == 'drive_method':
+            if data['value'] not in ('push', 'creep', 'tilt', 'push+creep', 'push+tilt', 'creep+tilt', 'push+creep+tilt'):
+                raise ValueError('Invalid drive method')
+            return f"drive_method {data['value']}"
         if name == 'pid':
             gains = [float(data[k]) for k in ('kp', 'ki', 'kd')]
             if not all(math.isfinite(g) and lo <= g <= hi for g, (lo, hi) in zip(gains, PID_LIMITS)):
@@ -152,7 +156,7 @@ class ControlPanel:
                 raise ValueError('Invalid push')
             return f'push {force} {duration} {direction}'
         limits = {'com': (-15, 15), 'tilt': (-20, 20), 'lat': (0, 250),
-                  'speed_limit': (0, 10.0), 'acceleration_limit': (.01, 50.0), 'turn_limit': (0, 720),
+                  'push_cmd': (0, 200), 'creep_bias': (0, 2), 'tilt_bias': (0, 10), 'turn_cmd': (0, 200), 'speed_limit': (0, 10.0), 'acceleration_limit': (.01, 50.0), 'turn_limit': (0, 720),
                   'turn_acceleration': (1, 3600), 'turn_command_limit': (0, 100)}
         lo, hi = limits[name]
         value = float(data['value'])

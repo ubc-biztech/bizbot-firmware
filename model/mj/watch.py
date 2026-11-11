@@ -9,7 +9,7 @@ Real time. The tab shows the 3D view (drag to orbit, scroll to zoom) next to the
 controls: switch between the firmware PID (blue, gains editable live), Daniel's
 PID from origin/daniel-updates with his tuner values (green, fixed), and each RL
 policy given with --policy (red; orange when its label says "old"), drive with
-W/A/S/D (RL only), push the torso with I/J/K/L
+W/A/S/D (RL only; W/S adds a fixed command to the wheels on top of the policy), push the torso with I/J/K/L
 forward/left/back/right relative to where the robot faces, live settings, new
 robot. Switching controller restarts the robot from a still start. Each robot is drawn from the ranges at --scale (0 nominal, 1 full); its key
 values show under the view and print when it appears. Random pushes are off unless
@@ -44,7 +44,7 @@ import bizbot_mj.plant as plant_mod  # noqa: E402
 from bizbot_mj import Randomization, U  # noqa: E402
 from bizbot_mj.env import BalanceEnv, EnvConfig  # noqa: E402
 from controls import ControlPanel  # noqa: E402
-from drive import DriveController  # noqa: E402
+from push_drive import PushDrive  # noqa: E402
 from turn import TurnController  # noqa: E402
 from turning_plant import TurningPlant  # noqa: E402
 
@@ -183,7 +183,7 @@ def build(mode, args, rand, gains, policies):
     pl = s.env.plant
     m = pl.m
     if mode in policies:
-        s.drive = DriveController(s.env.cfg.policy_dt, s.env.cfg.history, s.env.cfg.integral_leak_s, s.env.cfg.integral_limit)
+        s.drive = PushDrive()
     # Draw the skin instead of the plain physics shapes (which still collide and count).
     m.geom_rgba[pl.g_shell, 3] = m.geom_rgba[pl.g_wl, 3] = m.geom_rgba[pl.g_wr, 3] = 0.0
     color = body_color(mode, policies)
@@ -277,13 +277,25 @@ def main():
         if not parts:
             return
         try:
-            if parts[0] == "speed_limit":
+            if parts[0] == "push_cmd":
                 if drive is not None:
-                    drive.set_speed_limit(float(parts[1]))
+                    drive.set_command(float(parts[1]))
                 return
-            elif parts[0] == "acceleration_limit":
+            elif parts[0] == "creep_bias":
                 if drive is not None:
-                    drive.set_acceleration_limit(float(parts[1]))
+                    drive.set_creep_bias(float(parts[1]))
+                return
+            elif parts[0] == "tilt_bias":
+                if drive is not None:
+                    drive.set_tilt_bias(float(parts[1]))
+                return
+            elif parts[0] == "turn_cmd":
+                if drive is not None:
+                    drive.set_turn_command(float(parts[1]))
+                return
+            elif parts[0] == "drive_method":
+                if drive is not None:
+                    drive.set_method(parts[1])
                 return
             elif parts[0] == "turn_limit":
                 if turn is not None:
@@ -433,21 +445,18 @@ def main():
             apply_key_push()
             if drive is not None:
                 direction, turn_request = panel.inputs()
-                turning = bool(turn_request or turn.engaged)
-                policy_obs = drive.adapt(obs, pl.p['wheel_radius'][0], direction,
-                                         turning=turning)
-                pl.turn_command[0] = turn.update(turn_request, drive, pl.fb_rpm[0, 0], pl.fb_rpm[1, 0],
-                                                 pl.p['wheel_radius'][0], pl.p['track'][0],
-                                                 pl.p['speed_full_scale_rpm'][0], env.cfg.max_cmd)
-            else:
-                policy_obs = obs
-            obs, _, term, _, _ = env.step(np.asarray(s.act(policy_obs)).reshape(1))
-            if drive is not None:
-                if term[0]:
-                    drive.reset(require_release=True)
-                    turn.reset()
-                else:
-                    drive.record(obs, pl.p['wheel_radius'][0])
+                pl.drive_command[0], pl.turn_command[0] = drive.update(
+                    direction, turn_request, pl.fb_rpm[:, 0], pl.p['wheel_radius'][0])
+                pl.p['imu_mount_deg'][0] += drive.tilt_change()
+            obs, _, term, _, _ = env.step(np.asarray(s.act(obs)).reshape(1))
+            creep = drive.creep() if drive is not None else None
+            if creep is not None:
+                env.integral[0] = creep
+                obs[0, -1] = creep / env.cfg.integral_limit
+            if drive is not None and term[0]:
+                drive.reset(require_release=True)
+                turn.reset()
+                pl.drive_command[0] = 0.0
             if term[0]:
                 key_push["until"] = 0.0
                 pl.d.qfrc_applied[:] = 0.0

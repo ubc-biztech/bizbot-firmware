@@ -49,6 +49,8 @@ kbd {font:600 10px/1 var(--mono);color:var(--muted);background:var(--surface-3);
 .seg button {flex:1;background:transparent;border:0;color:var(--muted);font:600 12px var(--sans);padding:7px 0;border-radius:2px;cursor:pointer}
 .seg button:hover:not(:disabled) {color:var(--text);background:var(--surface-2)}
 .seg button.active {background:var(--surface-3);color:#fff}
+#drive-methods {flex-wrap:wrap}
+#drive-methods button {flex:1 1 30%;padding:7px 4px}
 .field {display:grid;grid-template-columns:1fr 92px;align-items:center;gap:8px}
 .field label {color:var(--muted);font-size:12px}
 .gains {display:grid;grid-template-columns:repeat(3,1fr) auto;gap:6px;align-items:end}
@@ -111,11 +113,12 @@ input[type=range] {width:100%;margin:2px 0 4px;accent-color:var(--blue-hi);heigh
           <button id="drive-backward" class="btn" disabled>S<small>back</small></button>
           <button id="turn-right" class="btn" disabled>D<small>right</small></button>
         </div>
-        <p class="note">Hold to drive, release to brake. A/D alone turns in place.</p>
+        <p class="note">W/S drives by the method picked below; release to stop. A/D push the wheels in opposite directions.</p>
         <div id="drive-status" class="status" role="status">Connecting…</div>
-        <div id="drive-speed" class="status dim">Requested 0.00 m/s · estimated 0.00 m/s</div>
+        <div id="drive-speed" class="status dim">Push 0 · estimated 0.00 m/s</div>
         <div id="turn-status" class="status dim" role="status"></div>
         <div class="divider"></div>
+        <div id="drive-methods" class="seg" role="group" aria-label="Drive method"></div>
         <div id="drive-limit"></div>
       </div>
     </section>
@@ -147,7 +150,7 @@ input[type=range] {width:100%;margin:2px 0 4px;accent-color:var(--blue-hi);heigh
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const fields = [['speed_limit','Request limit (m/s)',0,10.00,0.01],['acceleration_limit','Acceleration limit (m/s²)',0.01,50.00,0.01],['turn_limit','Turn-rate limit (°/s)',0,720,0.01],['turn_acceleration','Turn acceleration (°/s²)',1,3600,0.01],['turn_command_limit','Steering cap (%)',0,100,1],['com','COM forward offset (cm)',-15,15,0.1],['tilt','IMU mounting tilt (°)',-20,20,0.1],['lat','IMU latency (ms)',0,250,1]];
+const fields = [['push_cmd','W/S push (command, of ±1000)',0,200,1],['creep_bias','Creep bias (rev)',0,2,0.05],['tilt_bias','Tilt bias (°)',0,10,0.1],['turn_cmd','A/D push (command, of ±1000)',0,200,1],['com','COM forward offset (cm)',-15,15,0.1],['tilt','IMU mounting tilt (°)',-20,20,0.1],['lat','IMU latency (ms)',0,250,1]];
 let online = false;
 let driveEnabled = false;
 let driveSequence = Date.now() * 1000;
@@ -206,7 +209,7 @@ setInterval(() => { if (driveKeys.size && online && driveEnabled && !document.hi
 for (const [name,label,min,max,step] of fields) {
   const block = document.createElement('div');
   block.innerHTML = `<div class="field"><label for="${name}">${label}</label><input id="${name}" type="number" min="${min}" max="${max}" step="${step}"></div><input id="${name}-range" aria-label="${label}" type="range" min="${min}" max="${max}" step="${step}">`;
-  $(['speed_limit','acceleration_limit','turn_limit','turn_acceleration','turn_command_limit'].includes(name) ? 'drive-limit' : 'settings').append(block);
+  $(['push_cmd','creep_bias','tilt_bias','turn_cmd'].includes(name) ? 'drive-limit' : 'settings').append(block);
   let timer;
   const update = (source, target) => {
     if (!source.checkValidity() || source.value === '') return;
@@ -239,6 +242,23 @@ document.addEventListener('keydown', event => {
 });
 $('new').onclick = () => { clearDrive(); send({name:'new'}); };
 let shownModes = '';
+function renderDriveMethods(drive) {
+  const box = $('drive-methods');
+  if (!drive) { box.innerHTML = ''; return; }
+  if (box.children.length !== drive.methods.length) {
+    box.innerHTML = '';
+    for (const m of drive.methods) {
+      const b = document.createElement('button');
+      b.textContent = m; b.dataset.method = m;
+      b.onclick = () => { if (!b.classList.contains('active')) { clearDrive(); send({name:'drive_method',value:m}); } };
+      box.append(b);
+    }
+  }
+  for (const b of box.children) {
+    const on = b.dataset.method === drive.method;
+    b.classList.toggle('active', on); b.setAttribute('aria-pressed', on);
+  }
+}
 function renderModes(modes, mode) {
   const key = modes.join('|');
   if (key !== shownModes) {
@@ -352,11 +372,12 @@ async function refresh() {
     $('mode-tag').textContent = state.mode || '—'; paint($('mode-tag'), color);
     $('ctrl-chip').textContent = state.name || '—'; paint($('ctrl-chip'), color);
     if (state.modes) renderModes(state.modes, state.mode);
+    renderDriveMethods(state.drive);
     if (state.pid && !gainsPending && !gainIds.includes(document.activeElement?.id)) gainIds.forEach((id, i) => { $(id).value = state.pid[i]; });
     renderInfo(state.robot_info);
     $('turn-status').textContent = state.turn ? `Turn: requested ${(state.turn.reference*180/Math.PI).toFixed(1)}°/s · estimated ${(state.turn.rate*180/Math.PI).toFixed(1)}°/s` : '';
     for (const [name] of fields) {
-      const value = name === 'speed_limit' ? state.drive?.limit : name === 'acceleration_limit' ? state.drive?.acceleration_limit : name === 'turn_limit' ? state.turn?.limit_deg : name === 'turn_acceleration' ? state.turn?.acceleration_deg : name === 'turn_command_limit' ? state.turn?.command_percent : state[name];
+      const value = name === 'push_cmd' ? state.drive?.command : name === 'creep_bias' ? state.drive?.creep_bias : name === 'tilt_bias' ? state.drive?.tilt_bias : name === 'turn_cmd' ? state.drive?.turn_command : state[name];
       if (value === undefined || pending.has(name) || [$(name),$(name+'-range')].includes(document.activeElement)) continue;
       $(name).value = Number(value.toFixed(2));
       $(name+'-range').value = value;
@@ -365,8 +386,8 @@ async function refresh() {
       : state.push ? `Random push ${state.push > 0 ? '+' : ''}${state.push.toFixed(0)} N along X` : '';
     $('force-status').textContent = pushText || 'No push';
     $('push-chip').hidden = !pushText; $('push-chip').textContent = pushText;
-    $('drive-status').textContent = state.drive ? `${state.drive.status} · limit ${state.drive.limit.toFixed(2)} m/s` : 'Driving requires an RL policy';
-    if (state.drive) $('drive-speed').textContent = `Requested ${state.drive.reference.toFixed(2)} m/s · estimated ${state.drive.speed.toFixed(2)} m/s`;
+    $('drive-status').textContent = state.drive ? `${state.drive.status} · ${state.drive.method}` : 'Driving requires an RL policy';
+    if (state.drive) $('drive-speed').textContent = `Push ${state.drive.offset > 0 ? '+' : ''}${state.drive.offset.toFixed(0)} · estimated ${state.drive.speed.toFixed(2)} m/s`;
   } catch {
     online = false;
     clearDrive();
@@ -375,7 +396,7 @@ async function refresh() {
   document.querySelectorAll('button,input').forEach(el => el.disabled=!online);
   $('drive-forward').disabled = $('drive-backward').disabled = !online || !driveEnabled;
   $('turn-left').disabled = $('turn-right').disabled = !online || !driveEnabled;
-  for (const n of ['speed_limit','acceleration_limit','turn_limit','turn_acceleration','turn_command_limit']) $(n).disabled = $(n+'-range').disabled = !online || !driveEnabled;
+  for (const n of ['push_cmd','creep_bias','tilt_bias','turn_cmd']) $(n).disabled = $(n+'-range').disabled = !online || !driveEnabled;
   setTimeout(refresh, 250);
 }
 refresh();
