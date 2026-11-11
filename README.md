@@ -1,179 +1,147 @@
 # bizbot-firmware
-This firmware controls the low-level robot layer for BizBot.
 
-# BizBot ESP32 Firmware
+BizBot is a self-balancing robot: an ESP32 reads a BNO085 IMU and drives a
+hoverboard mainboard (EFeru hoverboard-firmware-hack-FOC, USART) over UART.
+This repo holds the ESP32 firmware, the MuJoCo sim and RL training that
+produce its balance policy, the laptop tools for driving and tuning it, the PCB,
+and the iPad face app.
 
-This firmware controls the low-level robot layer for BizBot.
-
-## Responsibilities
-
-- Read IMU
-- Read encoders
-- Control motors
-- Run balance PID loop
-- Receive high-level commands over USB serial or local Wi-Fi
-- Send telemetry to host
-- Enforce safety limits
-
-## Current Prototype Architecture
-
-Laptop -> USB Serial or Wi-Fi TCP -> ESP32 -> Motor Driver -> Motors
-
-## Command Protocol
-
-Send commands to the ESP32 over USB serial at 115200 baud or Wi-Fi TCP port
-3333. Each command must end with a newline (`\n`).
-
-```text
-ENABLE
-DISABLE
-STOP
-CMD_VEL <linear> <angular>
-GET_STATE
+```
+Laptop --USB serial or Wi-Fi TCP--> ESP32 --UART--> hoverboard board --> wheels
+                                      ^
+                                BNO085 (UART-RVC)
 ```
 
-`linear` and `angular` accept normalized values from `-1.0` to `1.0`.
+## Common commands
 
-```text
-ENABLE
-CMD_VEL 0.2 0.0
-GET_STATE
-STOP
-DISABLE
+Run `make` for the list. Override variables on the command line, e.g.
+`make flash PORT=/dev/cu.usbserial-10`.
+
+| Command | What it does |
+| --- | --- |
+| `make build` | Build the firmware in `firmware/` |
+| `make flash` | Build and upload to `PORT`. **Turn the hoverboard off first.** If it is on while flashing, its UART stalls |
+| `make servo-sweep` | Upload the separate servo test in `firmware/servo-sweep/` |
+| `make drive` | Join `BizBot-Control` Wi-Fi first. Then drive with W/A/S/D. It balances on connect and logs to `~/bizbot_<time>.log` |
+| `make tuner` | Browser tuner at http://localhost:5173 (`tools/tuner/`) |
+| `make sim` | MuJoCo viewer running `POLICY` on `ROBOT` |
+| `make export` | Export `POLICY` to C in `OUT` (default `model/deploy`) and run the host test |
+| `make test` | Sim/drive unit tests in `model/mj/tests` |
+
+The Makefile uses PlatformIO from `~/.platformio/penv/bin/pio` and Python from
+`.venv/bin/python`. Laptop tool dependencies are in `requirements.txt`, the sim
+needs `sim/requirements.txt`, and the tuner needs `npm install` in `tools/tuner/`.
+
+## Firmware
+
+`firmware/` is a PlatformIO project (`esp32dev`, Arduino, Adafruit BNO08x RVC).
+
+```
+firmware/src/
+├── main.cpp            setup/loop, Wi-Fi AP, hoverboard UART, 5 ms control loop, safety stops
+├── config.h            pins, limits, gains, IMU mounting, build switches
+├── hal/                Imu (BNO085 UART-RVC), OffsetStorage (saved trim), ServoControl
+├── control/            PID, BalanceController, VelocityControl, VelocityEstimator,
+│                       AccelerationFeedback, bizbot_policy.c/.h (generated RL policy)
+├── comms/              CommandParser (line protocol below)
+└── robot/RobotState.h  shared state
 ```
 
-## Local Wi-Fi control
+### Balance controller
 
-The ESP32 creates its own 2.4 GHz access point; a router or internet connection
-is not required.
+When enabled, the **RL policy** drives the wheels. It is generated C in
+`firmware/src/control/bizbot_policy.c`, currently from `ckpt_0120M.pt`, and runs
+every second 5 ms tick. The PID balance controller still runs every tick, but
+only to compute steering and to be logged. Its speed command is not sent. Each
+policy tick emits one line, over Wi-Fi when a client is connected and over USB
+otherwise:
 
-```text
-SSID: BizBot-Control
-Password: bizbot-control
-ESP32 address: 192.168.4.1
-TCP control port: 3333
+```
+RL <ms> <pitch_deg> <accel_fwd> <wheel_rpm> <battery_v> <pid_cmd> <rl_cmd> <us>
 ```
 
-Change the prototype password in `src/config.h` before operating in public.
-Only one TCP controller is accepted. While it is connected, Wi-Fi owns the
-command input and USB remains a debug console. A Wi-Fi disconnect immediately
-disables the robot and restores USB command input.
+The robot stops and disables on Wi-Fi disconnect, an IMU fault or stale data,
+a command timeout (500 ms; `keyboard_controls.py` keeps alive every 200 ms),
+a tilt beyond 35°, or a control-loop overrun. Each stop prints `FAULT <reason>`
+on USB.
 
-### Connect and test
+### Build switches (`config.h`, or `build_flags` in `platformio.ini`)
 
-1. Keep the wheels off the ground and leave the motor power disconnected for
-   the initial communications test.
-2. Install the host dependencies:
+- `IMU_USE_STUB=1`: no IMU wired; commands work but motor output is forced to zero.
+- `IMU_DEBUG_EULER=1`: stream raw Euler angles for mounting calibration or
+  `tools/imu_visualizer.py`.
+- `IMU_UART_RAW_DUMP=1`: hex-dump the IMU UART at boot.
+- `PID_DEBUG=1`: print controller internals.
+- `MOTOR_TEST=1`: send a constant speed command.
 
-   ```bash
-   python3 -m pip install -r requirements.txt
-   ```
+All default to 0. IMU wiring and calibration are in `docs/IMU_TESTING.md`.
 
-3. Build and upload using the PlatformIO IDE, or its CLI:
+### Command protocol
 
-   ```bash
-   pio run -d firmware --target upload
-   ```
+Commands go over USB serial (115200 baud) or Wi-Fi TCP. Each one is a line
+ending in `\n` and gets an `OK ...`, `ERR ...` or `STATE ...` reply.
 
-4. Open the USB serial monitor at 115200 baud. On a successful boot it prints:
+```text
+ENABLE | DISABLE | STOP | GET_STATE
+CMD_VEL <linear> <angular>          normalized -1.0..1.0; requires ENABLE
+SET_PID <kp> <ki> <kd>
+SET_PID_FB <kp_front> <kp_back> <ki> <kd>
+SET_P_BOOST <boost>   SET_P_WIDTH <deg>
+SET_D_BOOST <boost> <width_deg>
+SET_ACCEL <gain>                    see docs/ACCELERATION_FEEDBACK.md
+SET_VEL <kp> <ki>     SET_VEL_SIGN <±1>
+SET_FUSION <wheel_diameter_mm> <tau>
+SET_TRIM <deg>        ZERO_IMU      trim is saved to flash
+SERVO <1-3> <0-180>   SERVO_OFF [1-3]   SERVO_PING
+```
 
-   ```text
-   WiFi AP: BizBot-Control
-   WiFi control: 192.168.4.1:3333
-   ```
+The gain commands tune the PID, which is not what drives the wheels while the RL
+policy is in charge (see above).
 
-5. On the laptop, join the `BizBot-Control` Wi-Fi network using the password
-   above. The laptop may report that this network has no internet; that is
-   expected.
-6. Start Wi-Fi keyboard control:
+### Wi-Fi
 
-   ```bash
-   python3 tools/keyboard_controls.py --transport wifi
-   ```
+The ESP32 runs its own access point. It does not need a router or an internet connection.
 
-   Use `W/A/S/D`, release the keys to stop, press `I` for state, and `Q` to
-   stop, disable, and disconnect.
+```text
+SSID: BizBot-Control   Password: bizbot-control   (change in firmware/src/config.h)
+ESP32: 192.168.4.1     TCP control port: 3333
+```
 
-USB control remains available when no Wi-Fi TCP client is connected:
+It accepts one TCP controller at a time. While that controller is connected it
+owns command input, and USB is only a debug console. When it disconnects, the
+robot is disabled and USB command input comes back.
+
+### Host tests
+
+From `firmware/`:
 
 ```bash
-python3 tools/keyboard_controls.py --transport serial
+c++ -std=c++11 -I test/pid src/control/PID.cpp test/pid/test_derivative_boost.cpp -o /tmp/bizbot-pid-test && /tmp/bizbot-pid-test
+c++ -std=c++11 -Isrc test/velocity/check.cpp -o /tmp/bizbot-velocity-check && /tmp/bizbot-velocity-check
 ```
 
-The current PlatformIO configuration builds with `IMU_USE_STUB=1`. Stub builds
-accept commands for communications testing but always force the hoverboard
-output to zero. Do not set `IMU_USE_STUB=0` until the real IMU implementation
-returns correctly oriented pitch and pitch-rate measurements. After installing
-the real IMU, perform the first motor test with the chassis restrained and tune
-the placeholder controller values before putting the wheels on the ground.
+## Balance policy pipeline
 
-## Repo structure
+- `sim/bizbot_mj/`: MuJoCo plant and vectorised balance env, with
+  domain-randomised robot parameters. `sim/bizbot_sim/` is the older numpy sim.
+- `model/mj/`: training (`ppo.py`, `td3.py`, `pbt.py`, `distill.py`, `sweep.py`)
+  and evaluation (`metrics.py`, `evalckpt.py`, `baselines.py`, `summarize.py`).
+  It also has `watch.py` (viewer), `export_policy.py`, and tests in `tests/`.
+  Runs and checkpoints go to `model/mj/runs/` (gitignored).
+- `model/deploy/`: output of `make export`, which writes `bizbot_policy.c/.h/.json`,
+  `policy.pt`, `test_policy.c`, `test_vectors.h` and `SPEC.md` (the I/O contract).
+  To deploy, copy `bizbot_policy.c/.h` into `firmware/src/control/`. The copy in
+  `model/deploy/` is currently from `ckpt_0040M.pt`, older than the firmware's.
 
-```
-bizbot-firmware/
-├── firmware/
-│   ├── platformio.ini
-│   └── src/
-│       ├── main.cpp
-│       ├── config.h
-│       │
-│       ├── hal/
-│       │   ├── Imu.h
-│       │   ├── Imu.cpp
-│       │   ├── MotorDriver.h
-│       │   ├── MotorDriver.cpp
-│       │   ├── Encoder.h
-│       │   ├── Encoder.cpp
-│       │   ├── Battery.h
-│       │   └── Battery.cpp
-│       │
-│       ├── control/
-│       │   ├── PID.h
-│       │   ├── PID.cpp
-│       │   ├── BalanceController.h
-│       │   ├── BalanceController.cpp
-│       │   ├── VelocityController.h
-│       │   └── VelocityController.cpp
-│       │
-│       ├── comms/
-│       │   ├── CommandParser.h
-│       │   ├── CommandParser.cpp
-│       │   ├── Telemetry.h
-│       │   └── Telemetry.cpp
-│       │
-│       └── robot/
-│           ├── RobotState.h
-│           └── RobotState.cpp
-│
-├── sim/
-│   ├── bizbot_mj/
-│   └── bizbot_sim/
-│
-├── tools/
-│   ├── keyboard_control.py
-│   └── tuner/
-│
-└── README.md
-```
+## Other directories
 
-```
-main.cpp
-  runs setup()
-  runs loop()
-  calls everything else
-
-hal/
-  talks directly to hardware
-
-control/
-  computes motor outputs
-
-comms/
-  parses laptop commands and sends telemetry
-
-robot/
-  shared state: enabled, target velocity, current angle, battery, etc.
-
-tools/
-  Python scripts that run on laptop for testing
-```
+- `tools/`: `keyboard_controls.py` (drive over serial or Wi-Fi), `tuner/` (browser
+  tuner that spawns `keyboard_controls.py`), `servo_controller.py` (see
+  `SERVO_CONTROLLER.md`), `imu_visualizer.py`, and `tests/`, which need a
+  Python with Tkinter.
+- `firmware/servo-sweep/`: a separate PlatformIO project that sweeps three servos.
+  It runs no BizBot firmware.
+- `hardware/`: KiCad schematic, PCB and Gerber exports.
+- `interaction/`: native iPad face app, its Swift core and tests, and a Node
+  server. It sends no motor commands. See `interaction/README.md`.
+- `docs/`: `IMU_TESTING.md` and `ACCELERATION_FEEDBACK.md`.

@@ -27,6 +27,14 @@
 
 ## This project
 
+- `make` lists the common commands (build, flash, drive, tuner, sim, export,
+  test); `README.md` has the layout and command protocol.
+- The RL policy (`firmware/src/control/bizbot_policy.c`, generated) drives
+  the wheels; the PID still runs but only steers and is logged. `SET_PID` and
+  the other gain commands do not change what drives the wheels.
+- `make export` writes to `model/deploy/`; copying `bizbot_policy.c/.h` into
+  `firmware/src/control/` is a separate, manual step. Never hand-edit the
+  generated files.
 - Firmware is flashed with the hoverboard OFF; flashing with it on stalls its
   UART (needs a hoverboard power cycle with the ESP32 up).
 - Joining the robot's Wi-Fi kills this session; ask the user to collect logs
