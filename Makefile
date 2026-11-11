@@ -3,7 +3,8 @@
 
 PIO    ?= $(HOME)/.platformio/penv/bin/pio
 PY     ?= .venv/bin/python
-PORT   ?= /dev/cu.usbserial-110
+# First USB serial adapter plugged in; its number changes with the board and USB port.
+PORT   ?= $(firstword $(wildcard /dev/cu.usbserial-*))
 POLICY ?= model/mj/runs/fit_ft_O/ckpt_0120M.pt
 ROBOT  ?= $(HOME)/bizbot_sysid/real2sim/v3/robot_measured_delay.json
 OUT    ?= model/deploy
