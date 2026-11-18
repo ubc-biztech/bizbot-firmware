@@ -9,7 +9,8 @@ Real time. The tab shows the 3D view (drag to orbit, scroll to zoom) next to the
 controls: switch between the firmware PID (blue, gains editable live), Daniel's
 PID from origin/daniel-updates with his tuner values (green, fixed), and each RL
 policy given with --policy (red; orange when its label says "old"), drive with
-W/A/S/D (RL only; W/S adds a fixed command to the wheels on top of the policy), push the torso with I/J/K/L
+W/A/S/D (RL only; W/S adds a fixed command to the wheels on top of the policy, or for a policy trained
+with a target speed sets that target), push the torso with I/J/K/L
 forward/left/back/right relative to where the robot faces, live settings, new
 robot. Switching controller restarts the robot from a still start. Each robot is drawn from the ranges at --scale (0 nominal, 1 full); its key
 values show under the view and print when it appears. Random pushes are off unless
@@ -158,6 +159,8 @@ def build(mode, args, rand, gains, policies):
         path = policies[mode]
         policy, ck = load_policy(path)
         e = {k: v for k, v in ck["env"].items() if k not in ("n_envs", "episode_s")}
+        if e.get("target_rpm_max"):   # W/S sets the target; the env never picks its own
+            e.update(target_hold_min_s=1e9, target_hold_max_s=1e9, target_accel_rpm_s=0.0)
         s.env = BalanceEnv(EnvConfig(n_envs=1, episode_s=1e9, **{**e, **still}), rand, seed=args.seed, scale=args.scale)
         s.name = f"{mode} · {path.parent.name}/{path.name}"
         s.act = policy
@@ -183,7 +186,7 @@ def build(mode, args, rand, gains, policies):
     pl = s.env.plant
     m = pl.m
     if mode in policies:
-        s.drive = PushDrive()
+        s.drive = PushDrive(target=bool(s.env.cfg.target_rpm_max))
     # Draw the skin instead of the plain physics shapes (which still collide and count).
     m.geom_rgba[pl.g_shell, 3] = m.geom_rgba[pl.g_wl, 3] = m.geom_rgba[pl.g_wr, 3] = 0.0
     color = body_color(mode, policies)
@@ -288,6 +291,10 @@ def main():
             elif parts[0] == "tilt_bias":
                 if drive is not None:
                     drive.set_tilt_bias(float(parts[1]))
+                return
+            elif parts[0] == "target_rpm":
+                if drive is not None:
+                    drive.set_target_rpm(float(parts[1]))
                 return
             elif parts[0] == "turn_cmd":
                 if drive is not None:
@@ -448,6 +455,8 @@ def main():
                 pl.drive_command[0], pl.turn_command[0] = drive.update(
                     direction, turn_request, pl.fb_rpm[:, 0], pl.p['wheel_radius'][0])
                 pl.p['imu_mount_deg'][0] += drive.tilt_change()
+                if drive.has_target:
+                    env.target[0] = drive.target
             obs, _, term, _, _ = env.step(np.asarray(s.act(obs)).reshape(1))
             creep = drive.creep() if drive is not None else None
             if creep is not None:

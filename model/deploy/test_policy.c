@@ -12,8 +12,8 @@ int main(void) {
         BizbotPolicyState s;
         bizbot_policy_reset(&s);
         for (int k = 0; k < TV_TICKS; ++k) {
-            const float* x = &TV_SENSORS[r][k * 4];
-            int16_t cmd = bizbot_policy_tick(&s, x[0], x[1], x[2], x[3]);
+            const float* x = &TV_SENSORS[r][k * 5];
+            int16_t cmd = bizbot_policy_tick(&s, x[0], x[1], x[2], x[3], x[4]);
             double du = fabs((double)s.u - (double)TV_U[r][k]);
             if (du > worst_u) worst_u = du;
             int16_t want = (int16_t)(TV_U[r][k] * 500.0f);

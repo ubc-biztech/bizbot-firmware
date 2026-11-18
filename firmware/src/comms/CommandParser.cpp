@@ -75,6 +75,8 @@ void CommandParser::handleCommand(
         state.targetPitchDeg = 0.0f;
         state.targetLinear = 0.0f;
         state.targetAngular = 0.0f;
+        state.targetRpm = 0.0f;
+        state.turnCommand = 0.0f;
         output.println("OK DISABLED");
         return;
     }
@@ -82,8 +84,33 @@ void CommandParser::handleCommand(
     if (strcmp(command, "STOP") == 0) {
         state.targetLinear = 0.0f;
         state.targetAngular = 0.0f;
+        state.targetRpm = 0.0f;
+        state.turnCommand = 0.0f;
         state.lastCommandMs = millis();
         output.println("OK STOP");
+        return;
+    }
+
+    if (strncmp(command, "DRIVE ", 6) == 0) {
+        if (!state.enabled) {
+            output.println("ERR DISABLED");
+            return;
+        }
+        float rpm = 0.0f, turn = 0.0f;
+        char extra = '\0';
+        if (sscanf(command, "DRIVE %f %f %c", &rpm, &turn, &extra) != 2) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        if (!isfinite(rpm) || !isfinite(turn) ||
+            fabsf(rpm) > MAX_TARGET_RPM || fabsf(turn) > MAX_TURN_COMMAND) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        state.targetRpm = rpm;
+        state.turnCommand = turn;
+        state.lastCommandMs = millis();
+        output.println("OK DRIVE");
         return;
     }
 
@@ -195,6 +222,32 @@ void CommandParser::handleCommand(
         state.lastCommandMs = millis();
         output.print("OK SET_ACCEL ka=");
         output.println(gain, 3);
+        return;
+    }
+
+    if (strncmp(command, "MOTOR_TEST ", 11) == 0) {
+        int cmd = 0;
+        int ms = 0;
+        char extra = '\0';
+        if (sscanf(command, "MOTOR_TEST %d %d %c", &cmd, &ms, &extra) != 2) {
+            output.println("ERR INVALID_ARGUMENTS");
+            return;
+        }
+        if (state.enabled) {
+            output.println("ERR ENABLED");
+            return;
+        }
+        if (cmd < -150 || cmd > 150 || ms < 0 || ms > 2000) {
+            output.println("ERR OUT_OF_RANGE");
+            return;
+        }
+        state.motorTestCmd = static_cast<int16_t>(cmd);
+        state.motorTestUntilMs = millis() + static_cast<unsigned long>(ms);
+        state.lastCommandMs = millis();
+        output.print("OK MOTOR_TEST cmd=");
+        output.print(cmd);
+        output.print(" ms=");
+        output.println(ms);
         return;
     }
 

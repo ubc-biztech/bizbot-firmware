@@ -115,6 +115,27 @@ class Ensemble(nn.Module):
         return torch.stack([q(xa).squeeze(-1) for q in qs])
 
 
+def widen_inputs(state, at, n, keys):
+    """Insert n zero input columns at column `at` of the listed first-layer weights, so a network
+    trained without the extra observation entries computes exactly what it did before."""
+    for k in keys:
+        w = state[k]
+        state[k] = torch.cat([w[:, :at], w.new_zeros(w.shape[0], n), w[:, at:]], 1)
+
+
+def widen_norm(st, n):
+    """Normaliser for the extra entries starts at mean 0, variance 1."""
+    return {**st, "mean": list(st["mean"]) + [0.0] * n, "var": list(st["var"]) + [1.0] * n}
+
+
+def rescale_norm(st, i, k):
+    """Entry i of the observation is now k times its old value (e.g. the integral divided by a
+    larger integral_limit): scale its normaliser so the network sees the same normalised input."""
+    mean, var = list(st["mean"]), list(st["var"])
+    mean[i], var[i] = mean[i] * k, var[i] * k * k
+    return {**st, "mean": mean, "var": var}
+
+
 def train(c, out):
     from vec import VecEnv
     out.mkdir(parents=True, exist_ok=True)
@@ -145,8 +166,26 @@ def train(c, out):
     opt_a = torch.optim.Adam(actor.parameters(), lr=c.lr_actor)
     opt_c = torch.optim.Adam(critic.parameters(), lr=c.lr_critic)
     onorm, pnorm = RunningNorm(od), RunningNorm(pd)
+    from bizbot_mj.env import BalanceEnv
+    i_int = BalanceEnv.FRAME * env_cfg.history + 1   # observation entry: integral / integral_limit
     if c.init_learner:
         L = torch.load(c.init_learner, weights_only=False)
+        extra = od - len(L["obs_norm"]["mean"])   # observation entries added since (e.g. the target speed)
+        if extra:
+            assert extra > 0 and len(L["priv_norm"]["mean"]) == pd
+            at = od - extra
+            names = [k for k in L["critic"] if k.endswith(".0.weight")]   # first layer of each Q-network
+            for part in ("critic", "critic_t"):
+                widen_inputs(L[part], at, extra, names)
+            order = list(L["critic"])
+            for i, st in L["opt_c"]["state"].items():
+                if order[i] in names:
+                    for m in ("exp_avg", "exp_avg_sq"):
+                        st[m] = torch.cat([st[m][:, :at], st[m].new_zeros(st[m].shape[0], extra), st[m][:, at:]], 1)
+            L["obs_norm"] = widen_norm(L["obs_norm"], extra)
+        old_lim = L["env"]["integral_limit"]
+        if old_lim != env_cfg.integral_limit:
+            L["obs_norm"] = rescale_norm(L["obs_norm"], i_int, old_lim / env_cfg.integral_limit)
         critic.load_state_dict(L["critic"])
         critic_t.load_state_dict(L["critic_t"])
         opt_c.load_state_dict(L["opt_c"])
@@ -154,6 +193,14 @@ def train(c, out):
             nm.mean, nm.var, nm.count = np.array(st["mean"]), np.array(st["var"]), st["count"]
     if c.init_actor:
         A = torch.load(c.init_actor, weights_only=False)
+        extra = od - len(A["obs_norm"]["mean"])
+        if extra:
+            assert extra > 0 and not c.actor_priv
+            widen_inputs(A["actor"], od - extra, extra, ["net.0.weight"])
+            A["obs_norm"] = widen_norm(A["obs_norm"], extra)
+        old_lim = A["env"]["integral_limit"]
+        if old_lim != env_cfg.integral_limit and not c.init_learner:
+            A["obs_norm"] = rescale_norm(A["obs_norm"], i_int, old_lim / env_cfg.integral_limit)
         for net in (actor, actor_t, actor_cpu):
             net.load_state_dict(A["actor"])
         if not c.init_learner:

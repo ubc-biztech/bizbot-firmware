@@ -113,7 +113,7 @@ input[type=range] {width:100%;margin:2px 0 4px;accent-color:var(--blue-hi);heigh
           <button id="drive-backward" class="btn" disabled>S<small>back</small></button>
           <button id="turn-right" class="btn" disabled>D<small>right</small></button>
         </div>
-        <p class="note">W/S drives by the method picked below; release to stop. A/D push the wheels in opposite directions.</p>
+        <p class="note">W/S drives by the method picked below (target: sets the speed a target-trained policy drives at); release to stop. A/D push the wheels in opposite directions.</p>
         <div id="drive-status" class="status" role="status">Connecting…</div>
         <div id="drive-speed" class="status dim">Push 0 · estimated 0.00 m/s</div>
         <div id="turn-status" class="status dim" role="status"></div>
@@ -150,7 +150,7 @@ input[type=range] {width:100%;margin:2px 0 4px;accent-color:var(--blue-hi);heigh
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const fields = [['push_cmd','W/S push (command, of ±1000)',0,200,1],['creep_bias','Creep bias (rev)',0,2,0.05],['tilt_bias','Tilt bias (°)',0,10,0.1],['turn_cmd','A/D push (command, of ±1000)',0,200,1],['com','COM forward offset (cm)',-15,15,0.1],['tilt','IMU mounting tilt (°)',-20,20,0.1],['lat','IMU latency (ms)',0,250,1]];
+const fields = [['target_rpm','W/S target speed (wheel rpm)',0,150,1],['push_cmd','W/S push (command, of ±1000)',0,200,1],['creep_bias','Creep bias (rev)',0,2,0.05],['tilt_bias','Tilt bias (°)',0,10,0.1],['turn_cmd','A/D push (command, of ±1000)',0,200,1],['com','COM forward offset (cm)',-15,15,0.1],['tilt','IMU mounting tilt (°)',-20,20,0.1],['lat','IMU latency (ms)',0,250,1]];
 let online = false;
 let driveEnabled = false;
 let driveSequence = Date.now() * 1000;
@@ -209,7 +209,8 @@ setInterval(() => { if (driveKeys.size && online && driveEnabled && !document.hi
 for (const [name,label,min,max,step] of fields) {
   const block = document.createElement('div');
   block.innerHTML = `<div class="field"><label for="${name}">${label}</label><input id="${name}" type="number" min="${min}" max="${max}" step="${step}"></div><input id="${name}-range" aria-label="${label}" type="range" min="${min}" max="${max}" step="${step}">`;
-  $(['push_cmd','creep_bias','tilt_bias','turn_cmd'].includes(name) ? 'drive-limit' : 'settings').append(block);
+  block.id = name + '-block';
+  $(['target_rpm','push_cmd','creep_bias','tilt_bias','turn_cmd'].includes(name) ? 'drive-limit' : 'settings').append(block);
   let timer;
   const update = (source, target) => {
     if (!source.checkValidity() || source.value === '') return;
@@ -377,7 +378,7 @@ async function refresh() {
     renderInfo(state.robot_info);
     $('turn-status').textContent = state.turn ? `Turn: requested ${(state.turn.reference*180/Math.PI).toFixed(1)}°/s · estimated ${(state.turn.rate*180/Math.PI).toFixed(1)}°/s` : '';
     for (const [name] of fields) {
-      const value = name === 'push_cmd' ? state.drive?.command : name === 'creep_bias' ? state.drive?.creep_bias : name === 'tilt_bias' ? state.drive?.tilt_bias : name === 'turn_cmd' ? state.drive?.turn_command : state[name];
+      const value = name === 'target_rpm' ? state.drive?.target_rpm : name === 'push_cmd' ? state.drive?.command : name === 'creep_bias' ? state.drive?.creep_bias : name === 'tilt_bias' ? state.drive?.tilt_bias : name === 'turn_cmd' ? state.drive?.turn_command : state[name];
       if (value === undefined || pending.has(name) || [$(name),$(name+'-range')].includes(document.activeElement)) continue;
       $(name).value = Number(value.toFixed(2));
       $(name+'-range').value = value;
@@ -387,7 +388,12 @@ async function refresh() {
     $('force-status').textContent = pushText || 'No push';
     $('push-chip').hidden = !pushText; $('push-chip').textContent = pushText;
     $('drive-status').textContent = state.drive ? `${state.drive.status} · ${state.drive.method}` : 'Driving requires an RL policy';
-    if (state.drive) $('drive-speed').textContent = `Push ${state.drive.offset > 0 ? '+' : ''}${state.drive.offset.toFixed(0)} · estimated ${state.drive.speed.toFixed(2)} m/s`;
+    const targetMode = state.drive?.method === 'target';
+    $('target_rpm-block').hidden = !targetMode;
+    for (const n of ['push_cmd','creep_bias','tilt_bias']) $(n+'-block').hidden = targetMode;
+    if (state.drive) $('drive-speed').textContent = targetMode
+      ? `Target ${state.drive.target > 0 ? '+' : ''}${state.drive.target.toFixed(0)} rpm · estimated ${state.drive.speed.toFixed(2)} m/s`
+      : `Push ${state.drive.offset > 0 ? '+' : ''}${state.drive.offset.toFixed(0)} · estimated ${state.drive.speed.toFixed(2)} m/s`;
   } catch {
     online = false;
     clearDrive();
@@ -396,7 +402,7 @@ async function refresh() {
   document.querySelectorAll('button,input').forEach(el => el.disabled=!online);
   $('drive-forward').disabled = $('drive-backward').disabled = !online || !driveEnabled;
   $('turn-left').disabled = $('turn-right').disabled = !online || !driveEnabled;
-  for (const n of ['push_cmd','creep_bias','tilt_bias','turn_cmd']) $(n).disabled = $(n+'-range').disabled = !online || !driveEnabled;
+  for (const n of ['target_rpm','push_cmd','creep_bias','tilt_bias','turn_cmd']) $(n).disabled = $(n+'-range').disabled = !online || !driveEnabled;
   setTimeout(refresh, 250);
 }
 refresh();

@@ -1,6 +1,7 @@
 import numpy as np
 
 METHODS = ('push', 'creep', 'tilt', 'push+creep', 'push+tilt', 'creep+tilt', 'push+creep+tilt')
+TARGET = 'target'   # the only method for a policy trained with a target wheel speed in its observation
 
 
 class PushDrive:
@@ -14,11 +15,19 @@ class PushDrive:
            and leans forward
     With push or creep, creep is held (at zero without creep) while driving and after release until
     the wheels stop; tilt alone leaves creep alone.
+    target (policies trained with a target speed only) the target wheel rpm is +-target_rpm while
+           W/S is held and 0 otherwise; nothing is added to the wheels, creep or tilt
     A/D in every method: right wheel +-turn_command, left wheel -+turn_command."""
 
     STOPPED_MPS = 0.02
 
-    def __init__(self, command=80.0, turn_command=100.0, creep_bias=1.0, tilt_bias=1.0, method='push+creep+tilt'):
+    def __init__(self, command=80.0, turn_command=100.0, creep_bias=1.0, tilt_bias=1.0, method='push+creep+tilt',
+                 target=False, target_rpm=75.0):
+        self.has_target = target
+        self.methods = (TARGET,) if target else METHODS
+        if target:
+            method = TARGET
+        self.target_rpm = target_rpm
         self.command = command
         self.turn_command = turn_command
         self.creep_bias = creep_bias
@@ -47,14 +56,20 @@ class PushDrive:
             raise ValueError('Tilt bias must be between 0 and 10 degrees')
         self.tilt_bias = float(degrees)
 
+    def set_target_rpm(self, rpm):
+        if not np.isfinite(rpm) or not 0 <= rpm <= 300:
+            raise ValueError('Target must be between 0 and 300 rpm')
+        self.target_rpm = float(rpm)
+
     def set_method(self, method):
-        if method not in METHODS:
-            raise ValueError(f'Drive method must be one of {METHODS}')
+        if method not in self.methods:
+            raise ValueError(f'Drive method must be one of {self.methods}')
         self.method = method
 
     def reset(self, require_release=False):
         """Also after the plant resampled the robot, so the tilt applied so far is gone with it."""
         self.direction = 0
+        self.target = 0.0
         self.offset = 0.0
         self.turn = 0.0
         self.speed = 0.0
@@ -68,6 +83,7 @@ class PushDrive:
         parts = self.method.split('+')
         self.offset = float(-direction * self.command) if 'push' in parts else 0.0
         self.turn = float(turn * self.turn_command)
+        self.target = float(direction * self.target_rpm) if self.method == TARGET else 0.0
         uses_creep = 'push' in parts or 'creep' in parts
         self.hold_creep = uses_creep and (bool(direction) or (self.hold_creep and abs(self.speed) > self.STOPPED_MPS))
         return self.offset, self.turn
@@ -87,7 +103,8 @@ class PushDrive:
     def state(self):
         return {'command': self.command, 'turn_command': self.turn_command,
                 'creep_bias': self.creep_bias, 'tilt_bias': self.tilt_bias,
-                'method': self.method, 'methods': list(METHODS),
+                'method': self.method, 'methods': list(self.methods),
+                'target_rpm': self.target_rpm, 'target': self.target,
                 'offset': -self.offset, 'speed': self.speed,
                 'status': 'Driving' if self.direction else 'Stopping' if self.hold_creep else
                           'Turning' if self.turn else 'Balancing'}

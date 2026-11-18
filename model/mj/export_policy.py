@@ -71,7 +71,8 @@ def record_vectors(policy, env_kw, n_robots=4, ticks=400):
         seed += 1
         pl = env.plant
         sense = lambda: [float(pl.imu_pitch[0]), float(pl.imu_accel[0]),
-                         float(0.5 * (pl.fb_rpm[0, 0] + pl.fb_rpm[1, 0])), float(pl.batt_meas[0])]
+                         float(0.5 * (pl.fb_rpm[0, 0] + pl.fb_rpm[1, 0])), float(pl.batt_meas[0]),
+                         float(env.target[0])]
         obs = env._obs()
         S, Uc, A = [sense()], [], []
         fell = False
@@ -106,7 +107,8 @@ def main():
     std = np.sqrt(np.array(ck["obs_norm"]["var"]) + 1e-8)
     env = ck["env"]
     H, OBS, HID = env["history"], W1.shape[1], W1.shape[0]
-    assert OBS == 4 * H + 2 and W2.shape == (HID, HID) and W3.shape == (1, HID)
+    TGT = 1 if env.get("target_rpm_max") else 0   # trained with a target wheel speed as its last input
+    assert OBS == 4 * H + 2 + TGT and W2.shape == (HID, HID) and W3.shape == (1, HID)
     C = dict(history=H, obs=OBS, hidden=HID, dt=env["policy_dt"], max_cmd=env["max_cmd"],
              rate_limit=env["action_rate_limit"], leak_s=env["integral_leak_s"],
              integral_limit=env["integral_limit"], g=9.81, norm_clip=10.0)
@@ -135,7 +137,8 @@ def main():
 typedef struct {{
     float hist[BIZBOT_POLICY_HISTORY][4];  // oldest first: pitch/10, accel/g, rpm/60, command
     float u;                               // last command sent, normalised [-1, 1]
-    float integral;                        // leaky wheel rotation, revolutions
+    float integral;                        // leaky wheel rotation relative to the target, revolutions
+    float target;                          // target wheel rpm given on the previous tick
     int fresh;                             // 1 until the first tick after a reset
 }} BizbotPolicyState;
 
@@ -152,9 +155,11 @@ void bizbot_policy_reset(BizbotPolicyState* s);
 //                   (reads about -9.81*sin(pitch) at rest)
 //   wheel_rpm       mean of left and right wheel rpm, positive = rolling forward
 //   battery_v       battery voltage, volts
+//   target_rpm      wheel speed to drive at, rpm, positive = forward, 0 = stand still
+//                   ({"within +-%g" % env["target_rpm_max"] if TGT else "ignored: this policy was trained without a target"})
 // Returns the hoverboard speed command, -{C['max_cmd']}..{C['max_cmd']}, positive = drive forward.
 int16_t bizbot_policy_tick(BizbotPolicyState* s, float pitch_deg, float accel_fwd_mps2,
-                           float wheel_rpm, float battery_v);
+                           float wheel_rpm, float battery_v, float target_rpm);
 
 // The bare network: normalised-input pipeline included, obs -> action in [-1, 1].
 float bizbot_policy_forward(const float obs[BIZBOT_POLICY_OBS]);
@@ -220,7 +225,8 @@ void bizbot_policy_reset(BizbotPolicyState* s) {{
 }}
 
 int16_t bizbot_policy_tick(BizbotPolicyState* s, float pitch_deg, float accel_fwd_mps2,
-                           float wheel_rpm, float battery_v) {{
+                           float wheel_rpm, float battery_v, float target_rpm) {{
+    {"" if TGT else "target_rpm = 0.0f;"}
     const float frame[4] = {{pitch_deg / 10.0f, accel_fwd_mps2 / {C['g']}f, wheel_rpm / 60.0f, 0.0f}};
     if (s->fresh) {{
         // As the sim's reset: the whole history is the first reading, command 0, integral 0.
@@ -229,22 +235,26 @@ int16_t bizbot_policy_tick(BizbotPolicyState* s, float pitch_deg, float accel_fw
         }}
         s->u = 0.0f;
         s->integral = 0.0f;
+        s->target = 0.0f;
         s->fresh = 0;
     }} else {{
-        // As the sim's step: leaky integral of wheel rotation, then shift in the new frame
-        // paired with the command that was applied while it was measured.
+        // As the sim's step: leaky integral of wheel rotation relative to the target that held
+        // over the last tick, then shift in the new frame paired with the command that was
+        // applied while it was measured.
         const float decay = {np.exp(-C['dt'] / C['leak_s']):.9g}f;
-        float integ = s->integral * decay - wheel_rpm / 60.0f * {C['dt']}f;
+        float integ = s->integral * decay - (wheel_rpm - s->target) / 60.0f * {C['dt']}f;
         s->integral = integ > {C['integral_limit']}f ? {C['integral_limit']}f
                     : (integ < -{C['integral_limit']}f ? -{C['integral_limit']}f : integ);
         memmove(s->hist[0], s->hist[1], sizeof(s->hist) - sizeof(s->hist[0]));
         memcpy(s->hist[BIZBOT_POLICY_HISTORY - 1], frame, sizeof(frame));
         s->hist[BIZBOT_POLICY_HISTORY - 1][3] = s->u;
     }}
+    s->target = target_rpm;
     float obs[BIZBOT_POLICY_OBS];
     memcpy(obs, s->hist, sizeof(s->hist));
-    obs[BIZBOT_POLICY_OBS - 2] = (battery_v - 37.0f) / 5.0f;
-    obs[BIZBOT_POLICY_OBS - 1] = s->integral / {C['integral_limit']}f;
+    obs[4 * BIZBOT_POLICY_HISTORY] = (battery_v - 37.0f) / 5.0f;
+    obs[4 * BIZBOT_POLICY_HISTORY + 1] = s->integral / {C['integral_limit']}f;
+    {"obs[4 * BIZBOT_POLICY_HISTORY + 2] = target_rpm / 60.0f;" if TGT else ""}
     const float a = bizbot_policy_forward(obs);
     float du = a - s->u;
     du = du > {C['rate_limit']}f ? {C['rate_limit']}f : (du < -{C['rate_limit']}f ? -{C['rate_limit']}f : du);
@@ -299,8 +309,8 @@ int main(void) {{
         BizbotPolicyState s;
         bizbot_policy_reset(&s);
         for (int k = 0; k < TV_TICKS; ++k) {{
-            const float* x = &TV_SENSORS[r][k * 4];
-            int16_t cmd = bizbot_policy_tick(&s, x[0], x[1], x[2], x[3]);
+            const float* x = &TV_SENSORS[r][k * 5];
+            int16_t cmd = bizbot_policy_tick(&s, x[0], x[1], x[2], x[3], x[4]);
             double du = fabs((double)s.u - (double)TV_U[r][k]);
             if (du > worst_u) worst_u = du;
             int16_t want = (int16_t)(TV_U[r][k] * {C['max_cmd']}.0f);
@@ -323,7 +333,7 @@ Source: `{args.policy}`. Network: {OBS} inputs -> {HID} ELU -> {HID} ELU -> 1 ta
 
 ## Call pattern
 - `bizbot_policy_reset(&s)` when balancing (re)starts.
-- `bizbot_policy_tick(&s, pitch_deg, accel_fwd_mps2, wheel_rpm, battery_v)` every
+- `bizbot_policy_tick(&s, pitch_deg, accel_fwd_mps2, wheel_rpm, battery_v, target_rpm)` every
   {int(round(C['dt'] * 1000))} ms with the latest readings; send the returned value to the hoverboard as the
   speed command (steer 0). It is already rate limited ({C['rate_limit']} of full scale per tick) and
   scaled to +-{C['max_cmd']} (truncated toward zero).
@@ -335,10 +345,11 @@ Source: `{args.policy}`. Network: {OBS} inputs -> {HID} ELU -> {HID} ELU -> 1 ta
 | accel_fwd_mps2 | m/s^2 | + accelerating forward | raw accelerometer along the forward axis, gravity included: about -9.81*sin(pitch) at rest |
 | wheel_rpm | rpm | + rolling forward | mean of left and right after their individual signs are fixed |
 | battery_v | volts | | |
+| target_rpm | rpm | + forward | {"wheel speed to drive at, within +-%g; 0 = stand still" % env["target_rpm_max"] if TGT else "ignored: this policy was trained without a target"} |
 
 The runtime keeps the last {H} ticks of (pitch/10, accel/9.81, rpm/60, its own command),
-a leaky sum of wheel revolutions (decays over {C['leak_s']:.0f} s, clipped to +-{C['integral_limit']}),
-and appends (battery-37)/5 and that sum/{C['integral_limit']}; the network normalises each input with the
+a leaky sum of wheel revolutions{" relative to the target" if TGT else ""} (decays over {C['leak_s']:.0f} s, clipped to +-{C['integral_limit']}),
+and appends (battery-37)/5 and that sum/{C['integral_limit']}{" and target/60" if TGT else ""}; the network normalises each input with the
 training statistics and clips to +-{C['norm_clip']}.
 
 ## Output

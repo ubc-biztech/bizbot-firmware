@@ -22,7 +22,7 @@ Run `make` for the list. Override variables on the command line, e.g.
 | `make build` | Build the firmware in `firmware/` |
 | `make flash` | Build and upload to `PORT`. **Turn the hoverboard off first.** If it is on while flashing, its UART stalls |
 | `make servo-sweep` | Upload the separate servo test in `firmware/servo-sweep/` |
-| `make drive` | Join `BizBot-Control` Wi-Fi first. Then drive with W/A/S/D. It balances on connect and logs to `~/bizbot_<time>.log` |
+| `make drive` | Join `BizBot-Control` Wi-Fi first. Opens the drive page (`tools/drive_ui.py`) unless a tab is already open: W/S sets the target wheel speed, A/D steers. It balances on connect and logs to `~/bizbot_<time>.log` |
 | `make tuner` | Browser tuner at http://localhost:5173 (`tools/tuner/`) |
 | `make sim` | MuJoCo viewer running `POLICY` on `ROBOT` |
 | `make export` | Export `POLICY` to C in `OUT` (default `model/deploy`) and run the host test |
@@ -50,7 +50,7 @@ firmware/src/
 ### Balance controller
 
 When enabled, the **RL policy** drives the wheels. It is generated C in
-`firmware/src/control/bizbot_policy.c`, currently from `ckpt_0120M.pt`, and runs
+`firmware/src/control/bizbot_policy.c`, currently from `fit_tgt_E/final.pt`, and runs
 every second 5 ms tick. The PID balance controller still runs every tick, but
 only to compute steering and to be logged. Its speed command is not sent. Each
 policy tick emits one line, over Wi-Fi when a client is connected and over USB
@@ -61,7 +61,7 @@ RL <ms> <pitch_deg> <accel_fwd> <wheel_rpm> <battery_v> <pid_cmd> <rl_cmd> <us>
 ```
 
 The robot stops and disables on Wi-Fi disconnect, an IMU fault or stale data,
-a command timeout (500 ms; `keyboard_controls.py` keeps alive every 200 ms),
+a command timeout (500 ms; `drive_ui.py` keeps alive every 100 ms, `keyboard_controls.py` every 200 ms),
 a tilt beyond 35°, or a control-loop overrun. Each stop prints `FAULT <reason>`
 on USB.
 
@@ -84,6 +84,8 @@ ending in `\n` and gets an `OK ...`, `ERR ...` or `STATE ...` reply.
 ```text
 ENABLE | DISABLE | STOP | GET_STATE
 CMD_VEL <linear> <angular>          normalized -1.0..1.0; requires ENABLE
+DRIVE <target_rpm> <steer>          RL target wheel speed, ±150 rpm, + forward; steer ±200
+                                    hoverboard units; requires ENABLE; STOP zeroes both
 SET_PID <kp> <ki> <kd>
 SET_PID_FB <kp_front> <kp_back> <ki> <kd>
 SET_P_BOOST <boost>   SET_P_WIDTH <deg>
@@ -135,7 +137,7 @@ c++ -std=c++11 -Isrc test/velocity/check.cpp -o /tmp/bizbot-velocity-check && /t
 
 ## Other directories
 
-- `tools/`: `keyboard_controls.py` (drive over serial or Wi-Fi), `tuner/` (browser
+- `tools/`: `drive_ui.py` (browser drive page, serial or Wi-Fi), `keyboard_controls.py` (terminal W/A/S/D), `tuner/` (browser
   tuner that spawns `keyboard_controls.py`), `servo_controller.py` (see
   `SERVO_CONTROLLER.md`), `imu_visualizer.py`, and `tests/`, which need a
   Python with Tkinter.

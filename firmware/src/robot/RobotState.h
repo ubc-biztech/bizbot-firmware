@@ -7,6 +7,15 @@ struct RobotState {
 
     float targetLinear = 0.0f;
     float targetAngular = 0.0f;
+    // DRIVE: the RL policy's target wheel speed (rpm, forward positive) and a
+    // steer added on top of it (hoverboard units, positive = same way as
+    // positive angular).
+    float targetRpm = 0.0f;
+    float turnCommand = 0.0f;
+
+    // MOTOR_TEST: raw wheel command and when it ends (0 = not running).
+    int16_t motorTestCmd = 0;
+    unsigned long motorTestUntilMs = 0;
 
     float pitchDeg = 0.0f;
     float pitchRateDegPerSec = 0.0f;

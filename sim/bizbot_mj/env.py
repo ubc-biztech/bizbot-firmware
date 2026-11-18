@@ -59,6 +59,15 @@ class EnvConfig:
     l1_sway: float = 0.0             # weight on slow back-and-forth: |position - position low-passed over lean_slow_s|
     l1_sway_scale: float = 0.1       # m at which that penalty is full
     still_after_s: float = 5.0       # s since the last push, hand hold or sudden change before those two count
+    # Standing still on a zero target (nothing pressed): counted once the target has been 0 for zero_settle_s
+    # and no push or hand hold is acting.
+    l1_zero_v: float = 0.0           # weight on |ground speed|
+    zero_v_scale: float = 0.05       # m/s at which that penalty is full
+    l1_zero_rate: float = 0.0        # weight on |pitch rate|
+    zero_rate_scale: float = 0.15    # rad/s at which that penalty is full
+    l1_zero_rpm: float = 0.0         # weight on |measured wheel rpm|
+    zero_rpm_scale: float = 5.0      # rpm at which that penalty is full
+    zero_settle_s: float = 1.0       # s after the target reaches 0 before those count
     gentle_start_frac: float = 0.0   # share of episodes that start near upright and still (initial ranges x 0.1)
     push_shape: bool = False         # random pushes rise and fall over their length, with a hand shake on top
     dz_comp: float = 0.0             # firmware DZ_COMP: added to every nonzero command sent (the policy's history keeps the command without it)
@@ -69,6 +78,16 @@ class EnvConfig:
     w_dcmd: float = 5.0
     w_cmd: float = 0.0
     fall_penalty: float = 50.0
+    # Target wheel speed (0 = off: no target, observation and reward as before). With it on, each robot
+    # gets a target wheel rpm that steps to a new value every target_hold_min_s..target_hold_max_s:
+    # 0 with probability target_zero_frac, else uniform in +-target_rpm_max. The observation gains
+    # target/60 at the end; the wheel-rotation integral counts rotation relative to the target, and
+    # the speed penalties (w_vel, l1_vel) and l1_pos are taken relative to the target's ground speed.
+    target_rpm_max: float = 0.0
+    target_zero_frac: float = 0.3
+    target_hold_min_s: float = 1.0
+    target_hold_max_s: float = 5.0
+    target_accel_rpm_s: float = 0.0  # >0: the target moves to each new value at this rate instead of jumping
 
 
 PRIV_PARAMS = ("body_mass", "com_height", "com_offset", "body_gyration", "flex", "flex_hz",
@@ -89,11 +108,14 @@ class BalanceEnv:
         self.substeps = int(round(cfg.policy_dt / cfg.physics_dt))
         self.plant = Plant(n, rand, cfg.physics_dt, self.rng, scale)
         self.plant.push_shape = cfg.push_shape
-        self.obs_size = self.FRAME * cfg.history + 2
+        self.obs_size = self.FRAME * cfg.history + 2 + (1 if cfg.target_rpm_max else 0)
         self.priv_size = 10 + len(PRIV_PARAMS)
         self.hist = np.zeros((n, cfg.history, self.FRAME), dtype=np.float32)
         self.u = np.zeros(n)
         self.integral = np.zeros(n)
+        self.target = np.zeros(n)          # target wheel rpm
+        self.target_next = np.zeros(n)     # plant time of the next target change
+        self.target_goal = np.zeros(n)     # value the target ramps to (target_accel_rpm_s > 0)
         self.lean_fast = np.zeros(n)
         self.lean_slow = np.zeros(n)
         self.x_anchor = np.zeros(n)
@@ -104,6 +126,7 @@ class BalanceEnv:
         self._lo = np.array([getattr(rand, k).lo if hasattr(getattr(rand, k), "lo") else 0.0 for k in PRIV_PARAMS])
         self._hi = np.array([getattr(rand, k).hi if hasattr(getattr(rand, k), "hi") else 1.0 for k in PRIV_PARAMS])
         self.x0 = np.zeros(n)
+        self.zero_since = np.zeros(n)      # plant time the target last became 0
         self._reset(np.arange(n))
 
     @property
@@ -131,7 +154,14 @@ class BalanceEnv:
 
         rpm = self._wheel_rpm()
         self.integral = np.clip(self.integral * np.exp(-c.policy_dt / c.integral_leak_s)
-                                - rpm / 60.0 * c.policy_dt, -c.integral_limit, c.integral_limit)
+                                - (rpm - self.target) / 60.0 * c.policy_dt, -c.integral_limit, c.integral_limit)
+        target_speed = self.target / RPM_PER_RAD_S * pl.p["wheel_radius"]
+        self.x0 += target_speed * c.policy_dt
+        if c.target_rpm_max:
+            self._change_target(np.nonzero(pl.t >= self.target_next)[0])
+            if c.target_accel_rpm_s:
+                step = c.target_accel_rpm_s * c.policy_dt
+                self.target += np.clip(self.target_goal - self.target, -step, step)
         self.hist[:, :-1] = self.hist[:, 1:]
         self.hist[:, -1] = self._frame(slice(None))
 
@@ -150,7 +180,16 @@ class BalanceEnv:
             calm = (pl.t - self.last_event_t >= c.still_after_s) & (pl.t >= c.lean_slow_s)
             still_terms = np.where(calm, c.l1_lean * np.minimum(np.abs(self.lean_fast - self.lean_slow) / c.l1_lean_scale, 1.0)
                                    + c.l1_sway * np.minimum(np.abs(truth["position"] - self.x_anchor) / c.l1_sway_scale, 1.0), 0.0)
-        pen = (c.w_vel * (truth["speed"] / c.v_scale) ** 2 + c.w_rate * truth["pitch_rate"] ** 2
+        speed_err = truth["speed"] - target_speed
+        zero_terms = 0.0
+        if c.l1_zero_v or c.l1_zero_rate or c.l1_zero_rpm:
+            at_zero = (self.target == 0.0) & (self.target_goal == 0.0)
+            self.zero_since = np.where(at_zero, self.zero_since, pl.t)
+            quiet = at_zero & (pl.t - self.zero_since >= c.zero_settle_s) & (pl.t >= pl.push_until) & (pl.t >= pl.hand_until)
+            zero_terms = np.where(quiet, c.l1_zero_v * np.minimum(np.abs(truth["speed"]) / c.zero_v_scale, 1.0)
+                                  + c.l1_zero_rate * np.minimum(np.abs(truth["pitch_rate"]) / c.zero_rate_scale, 1.0)
+                                  + c.l1_zero_rpm * np.minimum(np.abs(rpm) / c.zero_rpm_scale, 1.0), 0.0)
+        pen = (c.w_vel * (speed_err / c.v_scale) ** 2 + c.w_rate * truth["pitch_rate"] ** 2
                + c.w_dcmd * (self.u - u_prev) ** 2 + c.w_cmd * self.u ** 2)
         if c.reward_form == "capped":
             reward = 1.0 - np.minimum(pen, 1.0)
@@ -159,14 +198,15 @@ class BalanceEnv:
         elif c.reward_form == "alive":
             reward = 1.0 - c.shape_weight * (1.0 - np.exp(-pen))
         elif c.reward_form == "l1":
-            l1_norm = max(1.0, c.l1_vel + c.l1_rate + c.l1_dcmd + c.l1_hold + c.l1_spin + c.l1_pos + c.l1_lean + c.l1_sway) if c.l1_normalize else 1.0
-            reward = 1.0 - (c.l1_vel * np.minimum(np.abs(truth["speed"]) / c.l1_v_scale, 1.0)
+            l1_norm = max(1.0, c.l1_vel + c.l1_rate + c.l1_dcmd + c.l1_hold + c.l1_spin + c.l1_pos + c.l1_lean + c.l1_sway
+                                + c.l1_zero_v + c.l1_zero_rate + c.l1_zero_rpm) if c.l1_normalize else 1.0
+            reward = 1.0 - (c.l1_vel * np.minimum(np.abs(speed_err) / c.l1_v_scale, 1.0)
                             + c.l1_rate * np.minimum(np.abs(truth["pitch_rate"]) / c.l1_rate_scale, 1.0)
                             + c.l1_dcmd * np.minimum(np.abs(self.u - u_prev) / 0.25, 1.0)
                             + c.l1_hold * np.minimum(np.abs(self.integral) / c.l1_hold_scale, 1.0)
                             + c.l1_spin * np.minimum(np.abs(truth["slip"]) / c.l1_spin_scale, 1.0)
                             + c.l1_pos * np.minimum(np.abs(truth["position"] - self.x0) / c.l1_pos_scale, 1.0)
-                            + still_terms) / l1_norm
+                            + still_terms + zero_terms) / l1_norm
         else:
             reward = 1.0 - pen
         reward = np.where(terminated, -c.fall_penalty, reward)
@@ -198,9 +238,14 @@ class BalanceEnv:
                          speed=rng.uniform(-1, 1, m) * c.init_speed * g)
         self.u[idx] = 0.0
         self.integral[idx] = 0.0
+        self.target[idx] = 0.0
+        self.target_goal[idx] = 0.0
+        if c.target_rpm_max:   # drawn only when on, so seeded runs without a target are as before
+            self.target_next[idx] = self.plant.t[idx] + rng.uniform(c.target_hold_min_s, c.target_hold_max_s, m)
         self.ep_return[idx] = 0.0
         self.ep_len[idx] = 0
         self.x0[idx] = self.plant.qpos[idx, 0]
+        self.zero_since[idx] = self.plant.t[idx]
         if c.l1_lean or c.l1_sway:
             tr = self.plant.truth()
             self.lean_fast[idx] = self.lean_slow[idx] = tr["pitch"][idx]
@@ -209,6 +254,18 @@ class BalanceEnv:
             self._change_next[idx] = self.plant.change_next[idx]
         self.hist[idx] = self._frame(idx)[:, None, :]
         self.last_priv = self._priv(self.plant.truth())
+
+    def _change_target(self, idx):
+        c, m = self.cfg, len(idx)
+        if not m:
+            return
+        new = self.rng.uniform(-1, 1, m) * c.target_rpm_max
+        new = np.where(self.rng.random(m) < c.target_zero_frac, 0.0, new)
+        if c.target_accel_rpm_s:
+            self.target_goal[idx] = new
+        else:
+            self.target[idx] = new
+        self.target_next[idx] = self.plant.t[idx] + self.rng.uniform(c.target_hold_min_s, c.target_hold_max_s, m)
 
     def _wheel_rpm(self, idx=slice(None)):
         # Firmware: wheelVelocity is the mean of left and (sign-corrected) right.
@@ -221,7 +278,10 @@ class BalanceEnv:
 
     def _obs(self):
         pl, c = self.plant, self.cfg
-        extra = np.stack([(pl.batt_meas - 37.0) / 5.0, self.integral / c.integral_limit], axis=1)
+        extra = [(pl.batt_meas - 37.0) / 5.0, self.integral / c.integral_limit]
+        if c.target_rpm_max:
+            extra.append(self.target / 60.0)
+        extra = np.stack(extra, axis=1)
         return np.concatenate([self.hist.reshape(c.n_envs, -1), extra], axis=1).astype(np.float32)
 
     def _priv(self, truth):

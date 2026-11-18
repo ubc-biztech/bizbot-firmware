@@ -70,7 +70,8 @@ bool wasEnabled = false;
 bool wifiControlReady = false;
 bool wifiControlWasConnected = false;
 
-// RL policy (O 120M) drives instead of the PID. The PID still runs and its command is logged.
+// RL policy (fit_tgt_E, takes a target wheel speed) drives instead of the PID. The PID still
+// runs and its command is logged. DRIVE sets the target and a steer added to the PID's.
 // Policy runs every 2nd 5 ms tick (its 10 ms period); DZ_COMP 20 is added to every nonzero
 // command, as in training. One line per policy run, never blocking:
 //   RL <ms> <pitch_deg> <accel_fwd> <wheel_rpm> <battery_v> <pid_cmd> <rl_cmd> <us>
@@ -92,6 +93,8 @@ void onEnabled() {
     latchedImuFault = false;
     robotState.targetLinear = 0.0f;
     robotState.targetAngular = 0.0f;
+    robotState.targetRpm = 0.0f;
+    robotState.turnCommand = 0.0f;
 }
 
 void Send(int16_t steer, int16_t speed) {
@@ -109,6 +112,8 @@ void disableRobot() {
     robotState.targetPitchDeg = 0.0f;
     robotState.targetLinear = 0.0f;
     robotState.targetAngular = 0.0f;
+    robotState.targetRpm = 0.0f;
+    robotState.turnCommand = 0.0f;
     wasEnabled = false;
 
     balanceController.reset();
@@ -277,6 +282,22 @@ void updateCommandInput() {
     usbCommandParser.update(DebugSerial, DebugSerial, robotState);
 }
 
+// Raw wheel command for the MOTOR_TEST link check. Returns true while it
+// owns the motor output. Never runs while enabled.
+bool runMotorTest() {
+    if (robotState.enabled || robotState.motorTestUntilMs == 0) {
+        return false;
+    }
+    if (static_cast<long>(millis() - robotState.motorTestUntilMs) >= 0) {
+        robotState.motorTestUntilMs = 0;
+        robotState.motorTestCmd = 0;
+        Send(0, 0);
+        return false;
+    }
+    Send(0, robotState.motorTestCmd);
+    return true;
+}
+
 void runControlLoop(float dtSeconds) {
     if (robotState.resetBalanceRequested) {
         balanceController.reset();
@@ -284,6 +305,9 @@ void runControlLoop(float dtSeconds) {
         robotState.targetPitchDeg = 0.0f;
         robotState.resetBalanceRequested = false;
         velocityEstimator.reset();
+    }
+    if (runMotorTest()) {
+        return;
     }
 #if IMU_USE_STUB
     // The stub reports a permanently upright robot and must never drive motors.
@@ -390,7 +414,7 @@ void runControlLoop(float dtSeconds) {
         const uint32_t t0 = micros();
         // One call: Arduino's constrain() is a macro that would evaluate (and step) the policy up to 3 times.
         const int16_t rlCmd = static_cast<int16_t>(RL_DRIVE_SIGN * bizbot_policy_tick(
-            &rlState, robotState.pitchDeg, accelFwd, wheelFwd, battery));
+            &rlState, robotState.pitchDeg, accelFwd, wheelFwd, battery, robotState.targetRpm));
         rlCmdHeld = constrain(rlCmd, -MAX_HOVERBOARD_COMMAND, MAX_HOVERBOARD_COMMAND);
         const uint32_t us = micros() - t0;
         char line[112];
@@ -411,7 +435,9 @@ void runControlLoop(float dtSeconds) {
         rlOut = constrain(rlOut + (rlOut > 0 ? RL_DZ_COMP : -RL_DZ_COMP),
                           -MAX_HOVERBOARD_COMMAND, MAX_HOVERBOARD_COMMAND);
     }
-    Send(steer, rlOut);
+    const int16_t turn = static_cast<int16_t>(robotState.turnCommand);
+    const int16_t steerOut = constrain(steer + turn, -MAX_HOVERBOARD_COMMAND, MAX_HOVERBOARD_COMMAND);
+    Send(steerOut, rlOut);
 
 #if PID_DEBUG
     static uint32_t lastPidDebugMs = 0;

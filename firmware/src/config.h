@@ -73,6 +73,10 @@ constexpr float MAX_VEL_LEAN_DEG = 3.0f;
 constexpr unsigned long WHEEL_FEEDBACK_STALE_MS = 200;
 constexpr float WHEEL_STALE_RETURN_DEG_PER_SEC = 3.0f;
 
+// DRIVE limits: the policy was trained with targets within +-150 rpm.
+constexpr float MAX_TARGET_RPM = 150.0f;
+constexpr float MAX_TURN_COMMAND = 200.0f;
+
 // Laptop keepalive should be faster than this (keyboard_controls.py uses 200 ms).
 constexpr unsigned long COMMAND_TIMEOUT_MS = 500;
 constexpr float MAX_TILT_DEG = 35.0f;

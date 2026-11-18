@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bizbot drive</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg:#111418; --surface:#1C2127; --surface-2:#252A31; --surface-3:#2F343C; --border:#383E47; --line:rgba(255,255,255,.07);
+  --text:#F6F7F9; --muted:#ABB3BF; --dim:#738091;
+  --blue:#2D72D2; --blue-hi:#4C90F0; --red:#CD4246; --red-hi:#E76A6E; --green:#32A467; --orange:#EC9A3C;
+  --sans:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;
+  --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  font:13px/1.45 var(--sans); background:var(--bg); color:var(--text);
+}
+* {box-sizing:border-box}
+body {margin:0;min-height:100vh;display:flex;flex-direction:column}
+.topbar {height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:var(--surface);border-bottom:1px solid var(--border)}
+.brand {display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:.02em}
+.mark {width:14px;height:14px;border-radius:2px;background:linear-gradient(135deg,var(--blue-hi),var(--blue));box-shadow:0 0 0 1px rgba(76,144,240,.35)}
+.crumb {color:var(--muted);font-weight:500} .sep {color:var(--dim)}
+.top-right {display:flex;align-items:center;gap:14px}
+.conn {display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+.dot {width:8px;height:8px;border-radius:50%;background:var(--dim)} .dot.on {background:var(--green);box-shadow:0 0 0 3px rgba(50,164,103,.18)}
+.tag {font:600 11px/1 var(--mono);letter-spacing:.04em;padding:5px 8px;border-radius:2px;background:var(--surface-3);color:var(--muted);border:1px solid var(--border)}
+.app {flex:1;display:grid;grid-template-columns:minmax(320px,1fr) 12px var(--side,360px);padding:12px;min-height:0}
+.splitter {cursor:col-resize;display:flex;justify-content:center;touch-action:none;outline:none}
+.splitter::before {content:"";width:2px;border-radius:1px;background:transparent;transition:background .12s}
+.splitter:hover::before,.splitter:focus-visible::before,.splitter.dragging::before {background:var(--blue-hi)}
+body.resizing {cursor:col-resize;user-select:none}
+@media (max-width:1000px) {.app {grid-template-columns:1fr;gap:12px} .splitter {display:none}}
+.card {background:var(--surface);border:1px solid var(--border);border-radius:3px;display:flex;flex-direction:column;min-width:0}
+.card-head {display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line)}
+.title {font:600 11px/1 var(--sans);text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.card-body {padding:12px;display:flex;flex-direction:column;gap:10px}
+.hint {font-size:11px;color:var(--dim)}
+.side {display:flex;flex-direction:column;gap:12px;overflow:auto;min-height:0;padding-right:2px}
+.view-wrap {position:relative;background:#0B0D10;border-bottom:1px solid var(--line)}
+#trace {display:block;width:100%;height:min(52vh,460px)}
+.overlay {position:absolute;left:10px;top:10px;display:flex;gap:6px;pointer-events:none}
+.chip {font:600 11px/1 var(--mono);padding:5px 8px;border-radius:2px;background:rgba(17,20,24,.78);border:1px solid var(--border);color:var(--muted);backdrop-filter:blur(4px)}
+.chip.warn {color:var(--orange);border-color:rgba(236,154,60,.5)}
+.kv {display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:0;margin:0}
+.kv div {padding:9px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.kv dt {font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim)} .kv dd {margin:3px 0 0;font:500 13px var(--mono);color:var(--text)}
+kbd {font:600 10px/1 var(--mono);color:var(--muted);background:var(--surface-3);border:1px solid var(--border);border-bottom-width:2px;border-radius:2px;padding:3px 5px}
+.keys {display:flex;gap:3px}
+.seg {display:flex;background:var(--bg);border:1px solid var(--border);border-radius:3px;padding:2px;gap:2px}
+.seg button {flex:1;background:transparent;border:0;color:var(--muted);font:600 12px var(--sans);padding:7px 0;border-radius:2px;cursor:pointer}
+.seg button:hover:not(:disabled) {color:var(--text);background:var(--surface-2)}
+.seg button.active {background:var(--surface-3);color:#fff}
+#drive-methods {flex-wrap:wrap}
+#drive-methods button {flex:1 1 30%;padding:7px 4px}
+.field {display:grid;grid-template-columns:1fr 92px;align-items:center;gap:8px}
+.field label {color:var(--muted);font-size:12px}
+.gains {display:grid;grid-template-columns:repeat(3,1fr) auto;gap:6px;align-items:end}
+.gains label {display:flex;flex-direction:column;gap:4px;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim)}
+input[type=number] {width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:2px;padding:6px 8px;font:500 12px var(--mono);outline:none}
+input[type=number]:focus {border-color:var(--blue-hi);box-shadow:0 0 0 2px rgba(76,144,240,.25)}
+input[type=range] {width:100%;margin:2px 0 4px;accent-color:var(--blue-hi);height:14px}
+.btn {background:var(--surface-3);color:var(--text);border:1px solid var(--border);border-radius:2px;padding:8px 10px;font:600 12px var(--sans);cursor:pointer;user-select:none}
+.btn:hover:not(:disabled) {background:#383E47} .btn:disabled {opacity:.4;cursor:default}
+.btn.primary {background:var(--blue);border-color:var(--blue)} .btn.primary:hover:not(:disabled) {background:#215DB0}
+.btn.held {background:var(--blue-hi);border-color:var(--blue-hi);color:#fff}
+.pad {display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.pad .btn {display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;touch-action:none}
+.pad .btn small {font:500 10px var(--sans);color:var(--dim)} .pad .btn.held small {color:#fff}
+.pad .gap {visibility:hidden}
+.status {font:12px var(--mono);color:var(--muted);min-height:18px}
+.status.dim {color:var(--dim)}
+.note {font-size:11px;color:var(--dim);margin:0}
+.divider {height:1px;background:var(--line);margin:2px 0}
+#drive-pad:focus-visible {outline:1px solid var(--blue-hi);outline-offset:-1px}
+.legend {position:absolute;right:10px;top:10px;display:flex;gap:6px;pointer-events:none}
+.sw {display:inline-block;width:8px;height:2px;vertical-align:middle;margin-right:5px}
+.btn.danger {background:var(--red);border-color:var(--red)} .btn.danger:hover:not(:disabled) {background:#AC2F33}
+.row {display:grid;grid-template-columns:1fr 1fr;gap:6px}
+#log {font:11px/1.5 var(--mono);color:var(--muted);margin:0;white-space:pre-wrap;word-break:break-all;max-height:190px;overflow:auto}
+</style>
+<header class="topbar">
+  <div class="brand"><span class="mark"></span><span class="crumb">BIZBOT</span><span class="sep">/</span><span>Robot</span></div>
+  <div class="top-right">
+    <span id="mode-tag" class="tag">—</span>
+    <span class="conn"><span id="dot" class="dot"></span><span id="status" role="status">Connecting…</span></span>
+  </div>
+</header>
+<main class="app">
+  <section class="card" aria-label="Live">
+    <div class="card-head"><span class="title">Live</span><span id="link" class="hint"></span></div>
+    <div class="view-wrap">
+      <canvas id="trace" aria-label="Wheel speed, target and pitch over the last 20 seconds"></canvas>
+      <div class="overlay"><span id="ctrl-chip" class="chip">—</span></div>
+      <div class="legend"><span class="chip"><i class="sw" style="background:var(--blue-hi)"></i>wheel rpm</span><span class="chip"><i class="sw" style="background:var(--muted)"></i>target rpm</span><span class="chip"><i class="sw" style="background:var(--red-hi)"></i>pitch °</span></div>
+    </div>
+    <dl id="robot-info" class="kv"></dl>
+  </section>
+  <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize panels" tabindex="0"></div>
+  <aside id="side" class="side">
+    <section class="card" aria-label="Balance">
+      <div class="card-head"><span class="title">Balance</span><span class="keys"><kbd>Esc</kbd></span></div>
+      <div class="card-body">
+        <div class="row"><button id="enable" class="btn primary">Enable</button><button id="disable" class="btn danger">Disable</button></div>
+        <p class="note">Enable starts balancing where the robot stands. Esc disables from anywhere on the page. Ctrl-C in the terminal disables and quits.</p>
+      </div>
+    </section>
+    <section class="card" id="drive-pad" tabindex="0" aria-label="Driving controls">
+      <div class="card-head"><span class="title">Drive</span><span class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span></div>
+      <div class="card-body">
+        <div class="pad">
+          <span class="gap"></span><button id="drive-forward" class="btn" disabled>W<small>forward</small></button><span class="gap"></span>
+          <button id="turn-left" class="btn" disabled>A<small>left</small></button>
+          <button id="drive-backward" class="btn" disabled>S<small>back</small></button>
+          <button id="turn-right" class="btn" disabled>D<small>right</small></button>
+        </div>
+        <p class="note">W/S sets the speed the policy drives at; release to stop. A/D adds a steer command.</p>
+        <div id="drive-status" class="status" role="status">Connecting…</div>
+        <div id="drive-speed" class="status dim">Target 0 rpm · estimated 0.00 m/s</div>
+        <div class="divider"></div>
+        <div id="drive-limit"></div>
+      </div>
+    </section>
+    <section class="card" aria-label="Robot log">
+      <div class="card-head"><span class="title">Robot log</span><span class="hint">Replies and faults</span></div>
+      <div class="card-body"><pre id="log"></pre></div>
+    </section>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const fields = [['target_rpm','W/S target speed (wheel rpm)',0,150,1],['turn_cmd','A/D steer (command, of ±1000)',0,200,1]];
+let online = false;
+let driveEnabled = false;
+let driveSequence = Date.now() * 1000;
+const driveKeys = new Set();
+const pending = new Set();
+async function send(data) {
+  try {
+    const response = await fetch('/command', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),signal:AbortSignal.timeout(1000),keepalive:true});
+    if (!response.ok) throw Error(response.status === 503 ? 'Robot connection lost' : 'Invalid control value');
+  } catch (error) {
+    $('status').textContent = error.message;
+    if (data.name === 'drive') clearDrive(false);
+  }
+}
+function sendDrive() {
+  const direction = Number(driveKeys.has('KeyW')) - Number(driveKeys.has('KeyS'));
+  const turn = Number(driveKeys.has('KeyA')) - Number(driveKeys.has('KeyD'));
+  send({name:'drive',direction,turn,sequence:++driveSequence});
+  $('drive-forward').classList.toggle('held', driveKeys.has('KeyW'));
+  $('drive-backward').classList.toggle('held', driveKeys.has('KeyS'));
+  $('turn-left').classList.toggle('held', driveKeys.has('KeyA'));
+  $('turn-right').classList.toggle('held', driveKeys.has('KeyD'));
+}
+function clearDrive(notify=true) {
+  const held = driveKeys.size > 0;
+  driveKeys.clear();
+  for (const id of ['drive-forward','drive-backward','turn-left','turn-right']) $(id).classList.remove('held');
+  if (held && notify) sendDrive();
+}
+document.addEventListener('keydown', event => {
+  if (event.code === 'Escape') { event.preventDefault(); clearDrive(); send({name:'disable'}); return; }
+  if (!['KeyW','KeyS','KeyA','KeyD'].includes(event.code) || !online || !driveEnabled || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.target.matches('input,textarea,[contenteditable="true"]')) return;
+  event.preventDefault();
+  if (!driveKeys.has(event.code)) { driveKeys.add(event.code); sendDrive(); }
+});
+document.addEventListener('keyup', event => {
+  if (driveKeys.delete(event.code)) { event.preventDefault(); sendDrive(); }
+});
+window.addEventListener('blur', () => clearDrive());
+window.addEventListener('pagehide', () => clearDrive());
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearDrive(); });
+document.addEventListener('focusin', event => { if (event.target.matches('input,textarea')) clearDrive(); });
+for (const [id,key] of [['drive-forward','KeyW'],['drive-backward','KeyS'],['turn-left','KeyA'],['turn-right','KeyD']]) {
+  $(id).addEventListener('pointerdown', event => {
+    if (!online || !driveEnabled || event.button !== 0) return;
+    event.preventDefault();
+    $('drive-pad').focus();
+    $(id).setPointerCapture(event.pointerId);
+    driveKeys.add(key); sendDrive();
+  });
+  for (const event of ['pointerup','pointercancel','lostpointercapture']) {
+    $(id).addEventListener(event, () => { if (driveKeys.delete(key)) sendDrive(); });
+  }
+}
+setInterval(() => { if (driveKeys.size && online && driveEnabled && !document.hidden) sendDrive(); }, 100);
+for (const [name,label,min,max,step] of fields) {
+  const block = document.createElement('div');
+  block.innerHTML = `<div class="field"><label for="${name}">${label}</label><input id="${name}" type="number" min="${min}" max="${max}" step="${step}"></div><input id="${name}-range" aria-label="${label}" type="range" min="${min}" max="${max}" step="${step}">`;
+  $('drive-limit').append(block);
+  let timer;
+  const update = (source, target) => {
+    if (!source.checkValidity() || source.value === '') return;
+    target.value = source.value;
+    pending.add(name);
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      await send({name,value:Number(source.value)});
+      setTimeout(() => pending.delete(name), 400);
+    }, 80);
+  };
+  $(name).addEventListener('input', () => update($(name), $(name+'-range')));
+  $(name+'-range').addEventListener('input', () => update($(name+'-range'), $(name)));
+}
+$('enable').onclick = () => send({name:'enable'});
+$('disable').onclick = () => { clearDrive(); send({name:'disable'}); };
+const app = document.querySelector('.app');
+const sideWidth = () => $('side').getBoundingClientRect().width;
+function setSide(px) {
+  const w = Math.round(Math.max(280, Math.min(px, window.innerWidth * 0.6)));
+  app.style.setProperty('--side', w + 'px');
+  try { localStorage.setItem('bizbot.side', w); } catch {}
+}
+try { const saved = Number(localStorage.getItem('bizbot.side')); if (saved) setSide(saved); } catch {}
+let split = null;
+$('splitter').addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  split = {x:event.clientX, w:sideWidth()};
+  $('splitter').setPointerCapture(event.pointerId); $('splitter').classList.add('dragging'); document.body.classList.add('resizing');
+  event.preventDefault();
+});
+$('splitter').addEventListener('pointermove', event => { if (split) setSide(split.w - (event.clientX - split.x)); });
+for (const name of ['pointerup','pointercancel']) $('splitter').addEventListener(name, () => {
+  split = null; $('splitter').classList.remove('dragging'); document.body.classList.remove('resizing');
+});
+$('splitter').addEventListener('keydown', event => {
+  const step = event.shiftKey ? 60 : 15;
+  if (event.key === 'ArrowLeft') { event.preventDefault(); setSide(sideWidth() + step); }
+  if (event.key === 'ArrowRight') { event.preventDefault(); setSide(sideWidth() - step); }
+});
+const fmt = (v, d, unit='') => v === null || v === undefined ? '—' : `${Number(v).toFixed(d)}${unit}`;
+const SPAN_MS = 20000;
+const samples = [];   // {t, rpm, target, pitch}
+function drawTrace() {
+  const canvas = $('trace'), ratio = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w * ratio) || canvas.height !== Math.round(h * ratio)) { canvas.width = Math.round(w * ratio); canvas.height = Math.round(h * ratio); }
+  const g = canvas.getContext('2d');
+  g.setTransform(ratio, 0, 0, ratio, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const now = Date.now(), x = t => w - (now - t) / SPAN_MS * w;
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const bands = [
+    {top:36, bottom:h * 0.58, limit:Math.max(60, ...samples.map(s => Math.max(Math.abs(s.rpm ?? 0), Math.abs(s.target)))) * 1.15, unit:' rpm',
+     lines:[['target', css('--muted'), 1], ['rpm', css('--blue-hi'), 1.5]]},
+    {top:h * 0.58 + 14, bottom:h - 10, limit:Math.max(5, ...samples.map(s => Math.abs(s.pitch ?? 0))) * 1.15, unit:'°',
+     lines:[['pitch', css('--red-hi'), 1.5]]}];
+  g.font = '10px ' + css('--mono');
+  for (const band of bands) {
+    const mid = (band.top + band.bottom) / 2, half = (band.bottom - band.top) / 2;
+    const y = v => mid - v / band.limit * half;
+    g.strokeStyle = 'rgba(255,255,255,.07)'; g.lineWidth = 1;
+    for (const v of [band.limit / 1.15, 0, -band.limit / 1.15]) { g.beginPath(); g.moveTo(0, y(v)); g.lineTo(w, y(v)); g.stroke(); }
+    g.fillStyle = css('--dim');
+    g.fillText(`+${(band.limit / 1.15).toFixed(0)}${band.unit}`, 8, y(band.limit / 1.15) - 4);
+    g.fillText('0', 8, y(0) - 4);
+    for (const [key, color, width] of band.lines) {
+      g.strokeStyle = color; g.lineWidth = width; g.beginPath();
+      let pen = false;
+      for (const s of samples) {
+        if (s[key] === null || s[key] === undefined) { pen = false; continue; }
+        if (pen) g.lineTo(x(s.t), y(s[key])); else g.moveTo(x(s.t), y(s[key]));
+        pen = true;
+      }
+      g.stroke();
+    }
+  }
+}
+let logSeq = 0;
+async function refresh() {
+  let state = null;
+  try {
+    const response = await fetch('/state', {signal:AbortSignal.timeout(1500)});
+    if (!response.ok) throw Error();
+    state = await response.json();
+  } catch {}
+  online = Boolean(state && state.connected);
+  if (online) {
+    driveEnabled = state.enabled;
+    $('status').textContent = 'Live'; $('dot').classList.add('on');
+    $('link').textContent = state.link;
+    $('mode-tag').textContent = 'RL';
+    $('ctrl-chip').textContent = state.status;
+    $('ctrl-chip').classList.toggle('warn', !state.enabled);
+    samples.push({t:Date.now(), rpm:state.wheel_rpm, target:state.target, pitch:state.pitch});
+    while (samples.length && Date.now() - samples[0].t > SPAN_MS) samples.shift();
+    const rows = [['Balance', state.enabled ? 'enabled' : 'disabled'], ['Pitch', fmt(state.pitch,2,'°')], ['Wheel speed', fmt(state.wheel_rpm,0,' rpm')],
+                  ['Speed', fmt(state.speed,2,' m/s')], ['Battery', fmt(state.battery,2,' V')], ['Command', fmt(state.command,0)],
+                  ['Policy time', state.policy_us === null ? '—' : fmt(state.policy_us/1000,2,' ms')]];
+    $('robot-info').innerHTML = rows.map(([k,v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+    for (const [name] of fields) {
+      if (pending.has(name) || [$(name),$(name+'-range')].includes(document.activeElement)) continue;
+      $(name).value = Number(state[name].toFixed(2));
+      $(name+'-range').value = state[name];
+    }
+    $('drive-status').textContent = state.steer ? `${state.status} · steer ${state.steer > 0 ? '+' : ''}${state.steer.toFixed(0)}` : state.status;
+    $('drive-speed').textContent = `Target ${state.target > 0 ? '+' : ''}${state.target.toFixed(0)} rpm (${state.target_speed.toFixed(2)} m/s) · estimated ${fmt(state.speed,2,' m/s')}`;
+    const last = state.log.length ? state.log[state.log.length - 1][0] : 0;
+    if (last !== logSeq) {
+      logSeq = last;
+      $('log').textContent = state.log.map(([, text]) => text).join('\n');
+      $('log').scrollTop = $('log').scrollHeight;
+    }
+  } else {
+    driveEnabled = false;
+    clearDrive();
+    $('status').textContent = state ? 'Robot disconnected' : 'Drive tool not running (make drive)'; $('dot').classList.remove('on');
+    $('ctrl-chip').textContent = '—';
+    $('drive-status').textContent = 'Disconnected';
+  }
+  drawTrace();
+  document.querySelectorAll('button,input').forEach(el => el.disabled = !online);
+  $('enable').disabled = !online || driveEnabled;
+  $('disable').disabled = !online;
+  $('drive-forward').disabled = $('drive-backward').disabled = !online || !driveEnabled;
+  $('turn-left').disabled = $('turn-right').disabled = !online || !driveEnabled;
+  setTimeout(refresh, online ? 100 : 500);
+}
+refresh();
+</script>
+</html>
